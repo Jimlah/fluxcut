@@ -6,6 +6,7 @@ import Timeline from "./components/Timeline";
 import Compositor from "./components/Compositor";
 import BottomBar from "./components/BottomBar";
 import ConvertPanel from "./components/ConvertPanel";
+import MixerPanel from "./components/MixerPanel";
 import FilePicker from "./components/FilePicker";
 import { FluxcutProvider, useFluxcutActions, useFluxcutBusy, useFluxcutSelector } from "./lib/useFluxcut";
 
@@ -97,6 +98,7 @@ function Studio() {
         <Timeline />
         <BottomBar />
         <ConvertPanel />
+        <MixerPanel />
         <FilePicker />
       </div>
     </div>

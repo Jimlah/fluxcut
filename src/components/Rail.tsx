@@ -14,7 +14,7 @@ const TOOLS = [
   { icon: Clapperboard, key: "clip", hint: "Clip" },
   { icon: Scissors, key: "razor", hint: "Razor" },
   { icon: AudioLines, key: "wave", hint: "Waveform" },
-  { icon: Music2, key: "music", hint: "Music" },
+  { icon: Music2, key: "mix", hint: "Audio mix" },
   { icon: Languages, key: "translate", hint: "Translate" },
   { icon: Users, key: "people", hint: "People" },
   { icon: Type, key: "text", hint: "Text" },

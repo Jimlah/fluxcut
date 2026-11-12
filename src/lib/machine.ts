@@ -33,13 +33,19 @@ import {
   newAssetId,
   planClipDrag,
   removeTrack,
+  removeClipKeyframe,
+  resetClipMix,
   rippleDeleteClip,
+  setClipMix,
   setClipSpeed,
   setClipText,
+  setTrackDuck,
   splitClip,
+  upsertClipKeyframe,
   type Asset,
   type ClipDragMode,
   type ClipId,
+  type SettableMix,
   type Timeline,
   type TrackId,
   type TrackKind,
@@ -118,6 +124,12 @@ export type FluxcutEvent =
   | { type: "CLIP_DELETE_RIPPLE"; clipId: ClipId | null }
   | { type: "CUT_CLIP"; clipId: ClipId | null; time: number | null }
   | { type: "SET_CLIP_SPEED"; clipId: ClipId; speed: number }
+  // ---- audio mixer (selected sound-carrying clip + per-track duck) ----
+  | { type: "SET_CLIP_MIX"; clipId: ClipId; control: string; patch: SettableMix }
+  | { type: "UPSERT_CLIP_KEYFRAME"; clipId: ClipId; t: number; g: number }
+  | { type: "REMOVE_CLIP_KEYFRAME"; clipId: ClipId; t: number }
+  | { type: "RESET_CLIP_MIX"; clipId: ClipId }
+  | { type: "SET_TRACK_DUCK"; trackId: TrackId; duck: boolean }
   | { type: "UNDO" }
   | { type: "REDO" }
   | {
@@ -262,22 +274,21 @@ function resolveTimeline(context: FluxcutContext, next: Timeline | null): Partia
 function applyTimelineEdit(
   context: FluxcutContext,
   next: Timeline | null,
-  opts?: { coalesceKey?: string; select?: ClipId }
+  opts?: { coalesceKey?: string; coalesceKind?: "text" | "mix"; select?: ClipId }
 ): Partial<FluxcutContext> {
   if (next == null || next === context.timeline) return {};
   const open = context.history.open;
   const coalesceKey = opts?.coalesceKey;
+  const coalesceKind = opts?.coalesceKind ?? "text";
   if (coalesceKey != null) {
-    if (open?.kind === "text" && open.key === coalesceKey) {
+    if (open?.kind === coalesceKind && open.key === coalesceKey) {
       return resolveTimeline(context, next);
     }
     return {
       ...resolveTimeline(context, next),
-      history: openTransaction(settleTransaction(context.history, context.timeline), {
-        kind: "text",
-        key: coalesceKey,
-        before: context.timeline,
-      }),
+      history: openTransaction(settleTransaction(context.history, context.timeline), coalesceKind === "mix"
+        ? { kind: "mix", key: coalesceKey, before: context.timeline }
+        : { kind: "text", key: coalesceKey, before: context.timeline }),
     };
   }
   return {
@@ -848,6 +859,42 @@ export const fluxcutMachine = setup({
     SET_CLIP_SPEED: {
       actions: assign(({ context, event }) =>
         applyTimelineEdit(context, setClipSpeed(context.timeline, event.clipId, event.speed))
+      ),
+    },
+    // ---- audio mixer: sliders coalesce per control, gestures register once ----
+    SET_CLIP_MIX: {
+      actions: assign(({ context, event }) =>
+        applyTimelineEdit(context, setClipMix(context.timeline, event.clipId, event.patch), {
+          coalesceKey: "mix:" + event.clipId + ":" + event.control,
+          coalesceKind: "mix",
+        })
+      ),
+    },
+    UPSERT_CLIP_KEYFRAME: {
+      actions: assign(({ context, event }) =>
+        applyTimelineEdit(
+          context,
+          upsertClipKeyframe(context.timeline, event.clipId, event.t, event.g),
+          {
+            coalesceKey: "mix:" + event.clipId + ":kf:" + event.t.toFixed(2),
+            coalesceKind: "mix",
+          }
+        )
+      ),
+    },
+    REMOVE_CLIP_KEYFRAME: {
+      actions: assign(({ context, event }) =>
+        applyTimelineEdit(context, removeClipKeyframe(context.timeline, event.clipId, event.t))
+      ),
+    },
+    RESET_CLIP_MIX: {
+      actions: assign(({ context, event }) =>
+        applyTimelineEdit(context, resetClipMix(context.timeline, event.clipId))
+      ),
+    },
+    SET_TRACK_DUCK: {
+      actions: assign(({ context, event }) =>
+        applyTimelineEdit(context, setTrackDuck(context.timeline, event.trackId, event.duck))
       ),
     },
     UNDO: {

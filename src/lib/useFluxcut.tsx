@@ -4,6 +4,7 @@ import type { ActorRefFrom, SnapshotFrom } from "xstate";
 import { fluxcutMachine, statusOf } from "./machine";
 import type { FluxcutContext as FluxcutMachineContext, FluxcutStatus } from "./machine";
 import { RESOLUTIONS } from "./convert";
+import { mixGain } from "./audio";
 import { aspectLabel, fmtBytes, fmtTime } from "./video";
 import { canRedo, canUndo } from "./history";
 import {
@@ -14,6 +15,8 @@ import {
   type Clip,
   type ClipDragMode,
   type ClipId,
+  type MixParams,
+  type SettableMix,
   type TrackId,
   type TrackKind,
   type VideoAsset,
@@ -100,6 +103,14 @@ export function useFluxcutActions() {
       rippleDeleteClip: (clipId: ClipId | null) => send({ type: "CLIP_DELETE_RIPPLE", clipId }),
       cutClip: (clipId: ClipId | null, time: number | null) => send({ type: "CUT_CLIP", clipId, time }),
       setClipSpeed: (clipId: ClipId, speed: number) => send({ type: "SET_CLIP_SPEED", clipId, speed }),
+      // ---- audio mixer ----
+      setClipMix: (clipId: ClipId, control: string, patch: SettableMix) =>
+        send({ type: "SET_CLIP_MIX", clipId, control, patch }),
+      addKeyframe: (clipId: ClipId, t: number, g: number) =>
+        send({ type: "UPSERT_CLIP_KEYFRAME", clipId, t, g }),
+      removeKeyframe: (clipId: ClipId, t: number) => send({ type: "REMOVE_CLIP_KEYFRAME", clipId, t }),
+      resetClipMix: (clipId: ClipId) => send({ type: "RESET_CLIP_MIX", clipId }),
+      setTrackDuck: (trackId: TrackId, duck: boolean) => send({ type: "SET_TRACK_DUCK", trackId, duck }),
       clipDragStart: (p: {
         clipId: ClipId;
         mode: ClipDragMode;
@@ -427,6 +438,10 @@ export interface PreviewMedia {
   speed: number;
   active: boolean;
   elKind: "video" | "audio" | "image";
+  /** The clip's mixer params; null on image layers. */
+  mix: MixParams | null;
+  /** Baseline x envelope x ducking at this comp time, in linear gain. */
+  mixGain: number;
 }
 
 export interface PreviewLayer {
@@ -459,6 +474,7 @@ export function selectPreview(s: FluxcutSnapshot): PreviewVM {
   const layers: PreviewLayer[] = [];
 
   const visualTotal = tl.tracks.filter((t) => t.kind !== "audio").length;
+  const mixes = mixGain(tl, time);
   tl.tracks.forEach((track, i) => {
     const visualBefore = tl.tracks.slice(0, i).filter((t) => t.kind !== "audio").length;
     const z = track.kind === "audio" ? 0 : visualTotal - visualBefore; // top lane highest
@@ -479,6 +495,7 @@ export function selectPreview(s: FluxcutSnapshot): PreviewVM {
       }
       const asset = tl.assets[clip.assetId];
       if (!asset) continue;
+      const mediaClip = clip.kind === "video" || clip.kind === "audio";
       layers.push({
         clipId: clip.id,
         kind: clip.kind,
@@ -488,13 +505,12 @@ export function selectPreview(s: FluxcutSnapshot): PreviewVM {
         active,
         media: {
           src: asset.url,
-          sourceTime:
-            clip.kind === "video" || clip.kind === "audio"
-              ? clip.sourceStart + Math.max(0, time - clip.start) * clip.speed
-              : 0,
-          speed: clip.kind === "video" || clip.kind === "audio" ? clip.speed : 1,
+          sourceTime: mediaClip ? clip.sourceStart + Math.max(0, time - clip.start) * clip.speed : 0,
+          speed: mediaClip ? clip.speed : 1,
           active,
           elKind: clip.kind,
+          mix: mediaClip ? clip.mix : null,
+          mixGain: mediaClip ? (mixes.get(clip.id) ?? 1) : 1,
         },
         text: null,
       });

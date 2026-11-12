@@ -10,7 +10,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { FORMATS, RESOLUTIONS, QUALITIES } from "../lib/convert";
-import { useFluxcutActions, useFluxcutBusy, useFluxcutFields, useFluxcutStatus, useFluxcutView } from "../lib/useFluxcut";
+import { useFluxcutActions, useFluxcutBusy, useFluxcutFields, useFluxcutSelector, useFluxcutStatus, useFluxcutView } from "../lib/useFluxcut";
 
 export default function ConvertPanel() {
   const actions = useFluxcutActions();
@@ -54,11 +54,13 @@ export default function ConvertPanel() {
   // Derived from machine state tags, via hooks
   const status = useFluxcutStatus();
   const busy = useFluxcutBusy();
+  const mixTool = useFluxcutSelector((s) => s.context.activeTool === "mix");
 
   const formatSupported = (id: string) =>
     !capsProbed || supportedFormats.includes(id);
 
-  if (!open) return null;
+  // The mix tool swaps this panel for the mixer panel.
+  if (!open || mixTool) return null;
 
   return (
     <aside className="panel">

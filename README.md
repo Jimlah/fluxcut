@@ -26,6 +26,7 @@ npm run preview  # serve the production build
 
 - **Load** a video by drag & drop or the file picker (MP4, WebM, MOV, MKV, …)
 - **Multi-track timeline** — stack layers of video, audio, images and text
+ - **Audio mixing and cleanup** — volume keyframes, automatic ducking of music under dialogue, 3-band EQ, compression, and a hiss/hum cleaner, mixed live in the preview (converted files stay un-mixed)
   independently: add, drag, resize and reorder tracks and clips, with a
   machine-driven composition clock, looped playback and a stacked preview
   (the old filmstrip stays as the first track's face; trim In/Out still drive

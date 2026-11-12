@@ -2,13 +2,14 @@
 // a drag gesture or a typing burst captures its baseline here and settles to
 // at most one entry. Pure module: no DOM, no XState, no React.
 
-import type { Clip, Timeline } from "./timeline";
+import type { Clip, MixParams, Timeline, Track } from "./timeline";
 
 export type HistoryEntry = { before: Timeline; after: Timeline };
 
 export type OpenTransaction =
   | { kind: "drag"; key: string; before: Timeline }
-  | { kind: "text"; key: string; before: Timeline };
+  | { kind: "text"; key: string; before: Timeline }
+  | { kind: "mix"; key: string; before: Timeline };
 
 export type SnapshotJournal = {
   /** Completed steps, oldest first. Undo pops the newest; capped at 100. */
@@ -19,13 +20,36 @@ export type SnapshotJournal = {
   open: OpenTransaction | null;
 };
 
+/** Deep equality of mixer snapshots: scalars plus the keyframe list. */
+function mixEquivalent(a: MixParams, b: MixParams): boolean {
+  if (a === b) return true;
+  return (
+    a.gain === b.gain &&
+    a.eqOn === b.eqOn && a.eqLowDb === b.eqLowDb && a.eqMidDb === b.eqMidDb &&
+    a.eqHighDb === b.eqHighDb &&
+    a.compressOn === b.compressOn && a.compressAmount === b.compressAmount &&
+    a.cleanOn === b.cleanOn &&
+    a.keyframes.length === b.keyframes.length &&
+    a.keyframes.every((k, i) => k.t === b.keyframes[i].t && k.g === b.keyframes[i].g)
+  );
+}
+
+/** Duck flag equality for the sound-carrying track variants. */
+function trackExtraEquivalent(a: Track, b: Track): boolean {
+  const aSound = a.kind === "video" || a.kind === "audio";
+  const bSound = b.kind === "video" || b.kind === "audio";
+  if (aSound !== bSound) return false;
+  if (!aSound) return true;
+  return (a as { duck: boolean }).duck === (b as { duck: boolean }).duck;
+}
+
 const CAP = 100;
 // Float drift a "the gesture ended where it began" comparison tolerates.
 const EPS = 1e-9;
 
 const numEq = (a: number, b: number) => a === b || Math.abs(a - b) < EPS;
 
-function clipsEquivalent(a: Clip, b: Clip): boolean {
+export function clipsEquivalent(a: Clip, b: Clip): boolean {
   if (a.id !== b.id || a.kind !== b.kind) return false;
   if (!numEq(a.start, b.start) || !numEq(a.duration, b.duration)) return false;
   const media = a.kind === "video" || a.kind === "audio";
@@ -33,7 +57,10 @@ function clipsEquivalent(a: Clip, b: Clip): boolean {
   if (media !== mediaB) return false;
   if (media && mediaB) {
     return (
-      a.assetId === b.assetId && numEq(a.sourceStart, b.sourceStart) && numEq(a.speed, b.speed)
+      a.assetId === b.assetId &&
+      numEq(a.sourceStart, b.sourceStart) &&
+      numEq(a.speed, b.speed) &&
+      mixEquivalent((a as { mix: MixParams }).mix, (b as { mix: MixParams }).mix)
     );
   }
   if (a.kind === "image" && b.kind === "image") return a.assetId === b.assetId;
@@ -47,8 +74,9 @@ export function timelinesEquivalent(a: Timeline, b: Timeline): boolean {
   return a.tracks.every((track, i) => {
     const other = b.tracks[i];
     if (track.id !== other.id || track.kind !== other.kind) return false;
+    if (!trackExtraEquivalent(track, other)) return false;
     if (track.clips.length !== other.clips.length) return false;
-    return track.clips.every((clip, j) => clipsEquivalent(clip, other.clips[j]));
+    return track.clips.every((clip, j) => clipsEquivalent(clip as Clip, other.clips[j] as Clip));
   });
 }
 
@@ -109,7 +137,7 @@ export function redoStep(
 /** True while a text burst is open (the undo settles and takes it), false while
  * a drag is open, else past.length > 0. Mirrors the UNDO event's behavior. */
 export const canUndo = (journal: SnapshotJournal): boolean =>
-  journal.open ? journal.open.kind === "text" : journal.past.length > 0;
+  journal.open ? journal.open.kind !== "drag" : journal.past.length > 0;
 
 /** False while a drag is open, else future.length > 0. Mirrors REDO. */
 export const canRedo = (journal: SnapshotJournal): boolean =>

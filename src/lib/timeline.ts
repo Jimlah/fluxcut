@@ -30,6 +30,23 @@ export type Asset = VideoAsset | AudioAsset | ImageAsset;
 export type VisualClipKind = "video" | "image" | "text";
 export type TrackKind = VisualClipKind | "audio";
 
+export type VolumeKeyframe = { t: Sec; g: number };
+
+export type MixParams = {
+  /** Linear gain multiplier. */
+  gain: number;
+  /** Clip-local composition seconds, sorted by t. */
+  keyframes: VolumeKeyframe[];
+  eqOn: boolean;
+  eqLowDb: number;
+  eqMidDb: number;
+  eqHighDb: number;
+  compressOn: boolean;
+  compressAmount: number;
+  /** High-pass + expander cleanup against steady hiss and hum. */
+  cleanOn: boolean;
+};
+
 export type VideoClip = {
   id: ClipId;
   kind: "video";
@@ -39,6 +56,7 @@ export type VideoClip = {
   sourceStart: Sec;
   /** Composition seconds per source second (0.25 = slow motion, 8 = timelapse). */
   speed: number;
+  mix: MixParams;
 };
 export type AudioClip = {
   id: ClipId;
@@ -49,16 +67,17 @@ export type AudioClip = {
   sourceStart: Sec;
   /** Composition seconds per source second (0.25 = slow motion, 8 = timelapse). */
   speed: number;
+  mix: MixParams;
 };
 export type ImageClip = { id: ClipId; kind: "image"; start: Sec; duration: Sec; assetId: AssetId };
 export type TextClip = { id: ClipId; kind: "text"; start: Sec; duration: Sec; text: string };
 export type Clip = VideoClip | AudioClip | ImageClip | TextClip;
 
 export type Track =
-  | { id: TrackId; kind: "video"; name: string; clips: VideoClip[] }
+  | { id: TrackId; kind: "video"; name: string; duck: boolean; clips: VideoClip[] }
   | { id: TrackId; kind: "image"; name: string; clips: ImageClip[] }
   | { id: TrackId; kind: "text"; name: string; clips: TextClip[] }
-  | { id: TrackId; kind: "audio"; name: string; clips: AudioClip[] };
+  | { id: TrackId; kind: "audio"; name: string; duck: boolean; clips: AudioClip[] };
 
 export type Timeline = {
   /** INV: visual lanes first (z-order = position, top lane draws last), audio lanes after. */
@@ -76,6 +95,66 @@ export const GROWTH_PLACEHOLDER_SEC = 3;
 export const SPEED_MIN = 0.25;
 export const SPEED_MAX = 8;
 export const SPEED_PRESETS: number[] = [0.25, 0.5, 1, 1.5, 2, 4, 8];
+
+// ---- audio mixer parameters (sound-carrying clips + ducking tracks) ----
+
+/** Linear gain and keyframe gain bounds. */
+export const MIX_GAIN_MAX = 2;
+/** EQ band range in dB per direction. */
+export const EQ_DB_MAX = 24;
+/** Bound on the compressor amount knob. */
+export const COMP_AMOUNT_MAX = 1;
+/** Upper keyframe count per clip. */
+export const MAX_KEYFRAMES = 64;
+/** A keyframe delete matches the nearest point within this distance. */
+export const KEYFRAME_MATCH_SEC = 0.01;
+
+/** Mix slider patch: each present field is clamped, not rejected. */
+export type SettableMix = {
+  gain?: number;
+  eqOn?: boolean;
+  eqLowDb?: number;
+  eqMidDb?: number;
+  eqHighDb?: number;
+  compressOn?: boolean;
+  compressAmount?: number;
+  cleanOn?: boolean;
+};
+
+const clampNum = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+const clampGain = (v: number) => clampNum(Number(v) || 0, 0, MIX_GAIN_MAX);
+const clampDb = (v: number) => clampNum(Number(v) || 0, -EQ_DB_MAX, EQ_DB_MAX);
+const clamp01 = (v: number) => clampNum(Number(v) || 0, 0, COMP_AMOUNT_MAX);
+
+/** Fresh defaults every call; a MixParams is never shared between clips. */
+export function defaultMix(): MixParams {
+  return {
+    gain: 1,
+    keyframes: [],
+    eqOn: false,
+    eqLowDb: 0,
+    eqMidDb: 0,
+    eqHighDb: 0,
+    compressOn: false,
+    compressAmount: 0.5,
+    cleanOn: false,
+  };
+}
+
+/** Drops duplicate/out-of-order/out-of-span points and clamps gains. */
+export function normalizeKeyframes(keyframes: VolumeKeyframe[], duration: Sec): VolumeKeyframe[] {
+  const sorted = [...keyframes].sort((a, b) => a.t - b.t);
+  const out: VolumeKeyframe[] = [];
+  for (const k of sorted) {
+    const t = clampNum(Number(k.t) || 0, 0, Math.max(0, duration));
+    const g = clampGain(k.g);
+    const prev = out[out.length - 1];
+    if (prev && t - prev.t < 1e-6) continue;
+    out.push({ t, g });
+  }
+  return out;
+}
+
 
 export const EMPTY_TIMELINE: Timeline = { tracks: [], assets: {}, primaryVideoClipId: null };
 
@@ -192,6 +271,8 @@ export function addTrack(tl: Timeline, kind: TrackKind): Timeline {
     kind,
     name: `${KIND_LABEL[kind]} ${tl.tracks.filter((t) => t.kind === kind).length + 1}`,
     clips: [],
+    // Imported audio defaults to a ducker; video lanes carry the dialogue by default.
+    ...(kind === "audio" ? { duck: true } : kind === "video" ? { duck: false } : {}),
   } as Track;
   if (!isVisual(kind)) return { ...tl, tracks: [...tl.tracks, track] };
   const audioStart = tl.tracks.findIndex((t) => !isVisual(t.kind));
@@ -277,17 +358,41 @@ export function splitClip(
   const rightDur = clip.duration - leftDur;
   if (leftDur < MIN_CLIP_SEC || rightDur < MIN_CLIP_SEC) return null;
   const idx = track.clips.findIndex((c) => c.id === clipId);
-  const leftClip: Clip = { ...clip, duration: leftDur };
-  const rightClip: Clip =
-    clip.kind === "video" || clip.kind === "audio"
-      ? {
-          ...clip,
-          id: newClipId(),
-          start: compTime,
-          duration: rightDur,
-          sourceStart: clip.sourceStart + leftDur * clip.speed,
-        }
-      : { ...clip, id: newClipId(), start: compTime, duration: rightDur };
+  // Keyframes are clip-local, so a split redistributes them: the left piece
+  // keeps its own tail (dropping points beyond the new span), the right piece
+  // shifts the other tail to its own origin.
+  const isMedia = clip.kind === "video" || clip.kind === "audio";
+  const leftClip: Clip = isMedia
+    ? {
+        ...clip,
+        duration: leftDur,
+        mix: {
+          ...clip.mix,
+          keyframes: normalizeKeyframes(
+            clip.mix.keyframes.filter((k) => k.t < leftDur),
+            leftDur
+          ),
+        },
+      }
+    : { ...clip, duration: leftDur };
+  const rightClip: Clip = isMedia
+    ? {
+        ...clip,
+        id: newClipId(),
+        start: compTime,
+        duration: rightDur,
+        sourceStart: clip.sourceStart + leftDur * clip.speed,
+        mix: {
+          ...clip.mix,
+          keyframes: normalizeKeyframes(
+            clip.mix.keyframes
+              .filter((k) => k.t >= leftDur)
+              .map((k) => ({ ...k, t: k.t - leftDur })),
+            rightDur
+          ),
+        },
+      }
+    : { ...clip, id: newClipId(), start: compTime, duration: rightDur };
   // Replace the left piece at its index with left + right in one splice.
   const clips = [...track.clips];
   clips.splice(idx, 1, leftClip, rightClip);
@@ -314,6 +419,120 @@ export function setClipSpeed(tl: Timeline, clipId: ClipId, speed: number): Timel
   return withTrack(tl, entry.track.id, () => withClip(entry.track, src.id, updated));
 }
 
+// ---- mixer edits (sound-carrying clips and tracks only) ----
+
+const isMediaClip = (clip: Clip): clip is VideoClip | AudioClip =>
+  clip.kind === "video" || clip.kind === "audio";
+
+/** Applies a slider patch onto one clip's mix, clamping every bounded value.
+ * Null on a missing or non-media target; an all-noop patch keeps the input. */
+export function setClipMix(tl: Timeline, clipId: ClipId, patch: SettableMix): Timeline | null {
+  const entry = findClipEntry(tl, clipId);
+  if (!entry || !isMediaClip(entry.clip)) return null;
+  const clip = entry.clip;
+  const mix = clip.mix;
+  const next: MixParams = {
+    gain: patch.gain != null ? clampGain(patch.gain) : mix.gain,
+    keyframes: mix.keyframes,
+    eqOn: patch.eqOn ?? mix.eqOn,
+    eqLowDb: patch.eqLowDb != null ? clampDb(patch.eqLowDb) : mix.eqLowDb,
+    eqMidDb: patch.eqMidDb != null ? clampDb(patch.eqMidDb) : mix.eqMidDb,
+    eqHighDb: patch.eqHighDb != null ? clampDb(patch.eqHighDb) : mix.eqHighDb,
+    compressOn: patch.compressOn ?? mix.compressOn,
+    compressAmount: patch.compressAmount != null ? clamp01(patch.compressAmount) : mix.compressAmount,
+    cleanOn: patch.cleanOn ?? mix.cleanOn,
+  };
+  const unchanged = next.gain === mix.gain && next.eqOn === mix.eqOn && next.eqLowDb === mix.eqLowDb &&
+    next.eqMidDb === mix.eqMidDb && next.eqHighDb === mix.eqHighDb &&
+    next.compressOn === mix.compressOn && next.compressAmount === mix.compressAmount &&
+    next.cleanOn === mix.cleanOn;
+  if (unchanged) return tl;
+  return withTrack(tl, entry.track.id, () => withClip(entry.track, clipId, { ...clip, mix: next }));
+}
+
+/** Upserts one keyframe in clip-local composition time: an existing point
+ * within 1ms of t replaces its gain, otherwise the point inserts sorted.
+ * At the 64-point cap a brand-new time is a no-op (same timeline). */
+export function upsertClipKeyframe(
+  tl: Timeline,
+  clipId: ClipId,
+  t: Sec,
+  g: number
+): Timeline | null {
+  const entry = findClipEntry(tl, clipId);
+  if (!entry || !isMediaClip(entry.clip)) return null;
+  const clip = entry.clip;
+  const mix = clip.mix;
+  // Stored points stay verbatim: an out-of-span point left by an earlier trim
+  // is never evaluated and never shifted; only the point being written clamps.
+  const keyframes = mix.keyframes;
+  const at = clampNum(t, 0, Math.max(0, clip.duration));
+  const gain = clampGain(g);
+  const i = keyframes.findIndex((k) => Math.abs(k.t - at) < 1e-3);
+  if (i === -1 && keyframes.length >= MAX_KEYFRAMES) return tl;
+  const nextKeyframes = i === -1
+    ? [...keyframes, { t: at, g: gain }].sort((a, b) => a.t - b.t)
+    : keyframes.map((k, j) => (j === i ? { t: k.t, g: gain } : k));
+  const unchanged = i !== -1 && keyframes[i].g === gain;
+  if (unchanged) return tl;
+  return withTrack(tl, entry.track.id, () =>
+    withClip(entry.track, clipId, {
+      ...clip,
+      mix: { ...mix, keyframes: nextKeyframes },
+    })
+  );
+}
+
+/** Removes the nearest keyframe within KEYFRAME_MATCH_SEC; no match keeps state. */
+export function removeClipKeyframe(tl: Timeline, clipId: ClipId, t: Sec): Timeline | null {
+  const entry = findClipEntry(tl, clipId);
+  if (!entry || !isMediaClip(entry.clip)) return null;
+  const clip = entry.clip;
+  const keyframes = clip.mix.keyframes;
+  const nearest = keyframes.reduce<VolumeKeyframe | null>((best, k) => {
+    if (best == null || Math.abs(k.t - t) < Math.abs(best.t - t)) return k;
+    return best;
+  }, null);
+  if (!nearest || Math.abs(nearest.t - t) > KEYFRAME_MATCH_SEC) return tl;
+  return withTrack(tl, entry.track.id, () =>
+    withClip(entry.track, clipId, {
+      ...clip,
+      mix: {
+        ...clip.mix,
+        keyframes: keyframes.filter((k) => k !== nearest),
+      },
+    })
+  );
+}
+
+/** Wipes one clip's mixer back to defaults (keyframes included). */
+export function resetClipMix(tl: Timeline, clipId: ClipId): Timeline | null {
+  const entry = findClipEntry(tl, clipId);
+  if (!entry || !isMediaClip(entry.clip)) return null;
+  const clip = entry.clip;
+  const fresh = defaultMix();
+  const mix = clip.mix;
+  const clean =
+    mix.gain === fresh.gain && mix.eqOn === false && mix.eqLowDb === 0 && mix.eqMidDb === 0 &&
+    mix.eqHighDb === 0 && mix.compressOn === false && mix.compressAmount === fresh.compressAmount &&
+    mix.cleanOn === false && mix.keyframes.length === 0;
+  if (clean) return tl;
+  return withTrack(tl, entry.track.id, () => withClip(entry.track, clipId, { ...clip, mix: fresh }));
+}
+
+/** Toggles the duck-under-dialogue policy of a sound-carrying track; null otherwise. */
+export function setTrackDuck(tl: Timeline, trackId: TrackId, duck: boolean): Timeline | null {
+  const track = findTrack(tl, trackId);
+  if (!track || (track.kind !== "video" && track.kind !== "audio")) return null;
+  if (track.duck === duck) return tl;
+  return {
+    ...tl,
+    tracks: tl.tracks.map((t) =>
+      t.id === trackId && (t.kind === "video" || t.kind === "audio") ? { ...t, duck } : t
+    ),
+  };
+}
+
 /** Inserts an asset-backed clip at `start` (pushed right past any blocker). */
 export function addMediaClip(
   tl: Timeline,
@@ -328,9 +547,9 @@ export function addMediaClip(
   const at = firstFreeStart(track, start, duration);
   const clip: Clip =
     asset.kind === "video"
-      ? { id: newClipId(), kind: "video", start: at, duration, assetId: asset.id, sourceStart: 0, speed: 1 }
+      ? { id: newClipId(), kind: "video", start: at, duration, assetId: asset.id, sourceStart: 0, speed: 1, mix: defaultMix() }
       : asset.kind === "audio"
-        ? { id: newClipId(), kind: "audio", start: at, duration, assetId: asset.id, sourceStart: 0, speed: 1 }
+        ? { id: newClipId(), kind: "audio", start: at, duration, assetId: asset.id, sourceStart: 0, speed: 1, mix: defaultMix() }
         : { id: newClipId(), kind: "image", start: at, duration, assetId: asset.id };
   return {
     timeline: withTrack(registerAsset(tl, asset), trackId, (t) => ({ ...t, clips: [...t.clips, clip] }) as Track),
@@ -504,8 +723,9 @@ export function bootstrapMainVideo(
     assetId: asset.id,
     sourceStart: 0,
     speed: 1,
+    mix: defaultMix(),
   };
-  const track: Track = { id: newTrackId(), kind: "video", name: KIND_LABEL.video + " 1", clips: [clip] };
+  const track: Track = { id: newTrackId(), kind: "video", name: KIND_LABEL.video + " 1", duck: false, clips: [clip] };
   return {
     tracks: [track],
     assets: { ...tl.assets, [asset.id]: asset },

@@ -34,6 +34,19 @@ globalThis.document = {
       };
     }
     if (tag === "canvas") return { width: 0, height: 0, getContext: () => null };
+    if (tag === "audio") {
+      // The mixerFixture's track-media probe lands through this element.
+      return {
+        preload: "",
+        src: "",
+        duration: 4,
+        addEventListener(type, cb) {
+          if (type === "loadedmetadata") queueMicrotask(() => cb());
+        },
+        removeAttribute() {},
+        load() {},
+      };
+    }
     return null;
   },
 };
@@ -254,6 +267,109 @@ await check("failed load: resetFile empties the journal (the same action CLEAR u
   const c = ctx(actor);
   ok(c.history.past.length === 0 && c.history.open === null, "a failed load left history entries");
   ok(c.timeline.tracks.length === 0, "a failed load kept timeline tracks");
+});
+
+
+// ---- audio mixer: event wiring, coalescing, undo semantics ----
+
+const close = (a, b, what, eps = 1e-9) => {
+  if (Math.abs(a - b) > eps) throw new Error(what + ": got " + a + ", want " + b);
+};
+
+// A fake main video (5s) plus an audio track with one clip, ready for mixer events.
+const mixerFixture = async () => {
+  // Earlier checks flip the fake decode to error; every load needs a good one.
+  videoEvent = "loadedmetadata";
+  const actor = start();
+  actor.send({ type: "LOAD_FILE", file: makeFile("mix.mp4") });
+  await waitFor(actor, (s) => s.matches("ready"), { timeout: 2000 });
+  actor.send({ type: "ADD_TRACK", kind: "audio" });
+  const trackId = ctx(actor).timeline.tracks.find((t) => t.kind === "audio").id;
+  actor.send({ type: "REQUEST_PICK_TRACK_MEDIA", trackId });
+  actor.send({ type: "ADD_MEDIA_CLIP", trackId, file: new File([new Uint8Array([1])], "tone.wav", { type: "audio/wav" }) });
+  await waitFor(actor, (s) => s.context.timeline.tracks.find((t) => t.kind === "audio")?.clips.length === 1, { timeout: 2000 });
+  const audioClipId = ctx(actor).timeline.tracks.find((t) => t.kind === "audio").clips[0].id;
+  actor.send({ type: "SELECT_CLIP", clipId: audioClipId });
+  return { actor, audioClipId, audioTrackId: trackId };
+};
+const clipMix = (actor, clipId) => {
+  for (const t of ctx(actor).timeline.tracks) {
+    const c = t.clips.find((k) => k.id === clipId);
+    if (c) return c.mix;
+  }
+  return null;
+};
+const trackDuck = (actor, trackId) => ctx(actor).timeline.tracks.find((t) => t.id === trackId)?.duck;
+
+await check("audio track ingest defaults to ducker and the video lane to dialogue", async () => {
+  const { actor, audioTrackId } = await mixerFixture();
+  ok(trackDuck(actor, audioTrackId) === true, "audio track did not default to ducker");
+  ok(trackDuck(actor, ctx(actor).timeline.tracks[0].id) === false, "video lane did not default to dialogue");
+});
+
+await check("mixer burst: a slider sweep coalesces into one undo step and settles like text", async () => {
+  const { actor, audioClipId } = await mixerFixture();
+  const pastCount = ctx(actor).history.past.length;
+  actor.send({ type: "SET_CLIP_MIX", clipId: audioClipId, control: "volume", patch: { gain: 0.5 } });
+  const open = ctx(actor).history.open;
+  ok(open && open.kind === "mix" && open.key === "mix:" + audioClipId + ":volume", "the first slider move did not open a mix burst");
+  actor.send({ type: "SET_CLIP_MIX", clipId: audioClipId, control: "volume", patch: { gain: 1 } });
+  actor.send({ type: "SET_CLIP_MIX", clipId: audioClipId, control: "volume", patch: { gain: 1.5 } });
+  ok(ctx(actor).history.past.length === pastCount, "a slider step recorded an entry mid-burst");
+  close(clipMix(actor, audioClipId).gain, 1.5, "slider burst did not project its final gain");
+  actor.send({ type: "SET_CLIP_MIX", clipId: audioClipId, control: "eq", patch: { eqOn: true } });
+  ok(ctx(actor).history.past.length === pastCount + 1, "a new control did not settle the previous burst as one entry");
+  const open2 = ctx(actor).history.open;
+  ok(open2 && open2.kind === "mix" && open2.key === "mix:" + audioClipId + ":eq", "the second control did not open its own burst");
+  actor.send({ type: "SELECT_CLIP", clipId: null });
+  const c = ctx(actor);
+  ok(c.history.past.length === pastCount + 2, "two control bursts did not settle to two entries");
+  actor.send({ type: "UNDO" });
+  ok(clipMix(actor, audioClipId).eqOn === false, "UNDO kept the eq toggle");
+  close(clipMix(actor, audioClipId).gain, 1.5, "UNDO did not revert the eq burst onto the volume burst state");
+  actor.send({ type: "UNDO" });
+  close(clipMix(actor, audioClipId).gain, 1, "a second UNDO did not restore the pre-burst gain");
+});
+
+await check("keyframe upsert coalesces per point and REMOVE lands as its own step", async () => {
+  const { actor, audioClipId } = await mixerFixture();
+  const pastCount = ctx(actor).history.past.length;
+  actor.send({ type: "UPSERT_CLIP_KEYFRAME", clipId: audioClipId, t: 2, g: 0.5 });
+  actor.send({ type: "UPSERT_CLIP_KEYFRAME", clipId: audioClipId, t: 2.0005, g: 0.8 });
+  ok(ctx(actor).history.past.length === pastCount, "an upsert on the same point recorded mid-burst");
+  close(clipMix(actor, audioClipId).keyframes[0].g, 0.8, "upsert replace did not land");
+  actor.send({ type: "SELECT_CLIP", clipId: null });
+  ok(ctx(actor).history.past.length === pastCount + 1, "the keyframe burst did not settle");
+  actor.send({ type: "REMOVE_CLIP_KEYFRAME", clipId: audioClipId, t: 2 });
+  ok(clipMix(actor, audioClipId).keyframes.length === 0, "remove did not empty the keyframe list");
+  ok(ctx(actor).history.past.length === pastCount + 2, "a remove did not register its own step");
+});
+
+await check("SET_TRACK_DUCK registers one step and RESET_CLIP_MIX wipes the mix", async () => {
+  const { actor, audioClipId, audioTrackId } = await mixerFixture();
+  actor.send({ type: "UPSERT_CLIP_KEYFRAME", clipId: audioClipId, t: 1, g: 0.5 });
+  actor.send({ type: "SELECT_CLIP", clipId: null });
+  const pastCount = ctx(actor).history.past.length;
+  actor.send({ type: "SET_TRACK_DUCK", trackId: audioTrackId, duck: false });
+  ok(trackDuck(actor, audioTrackId) === false, "the duck toggle did not project");
+  ok(ctx(actor).history.past.length === pastCount + 1, "the duck toggle did not book one step");
+  actor.send({ type: "RESET_CLIP_MIX", clipId: audioClipId });
+  const mix = clipMix(actor, audioClipId);
+  ok(mix.gain === 1 && mix.keyframes.length === 0 && !mix.eqOn && !mix.compressOn && !mix.cleanOn, "reset left mixer fields behind");
+  ok(ctx(actor).history.past.length === pastCount + 2, "the reset did not book one step");
+});
+
+await check("clamped slider patches never corrupt the mix; unknown clips never touch state", async () => {
+  const { actor, audioClipId } = await mixerFixture();
+  actor.send({ type: "SELECT_CLIP", clipId: null });
+  actor.send({ type: "SET_CLIP_MIX", clipId: audioClipId, control: "volume", patch: { gain: 99 } });
+  ok(clipMix(actor, audioClipId).gain === 2, "gain 99 was not clamped to the max");
+  actor.send({ type: "SET_CLIP_MIX", clipId: audioClipId, control: "eq", patch: { eqMidDb: -99 } });
+  ok(clipMix(actor, audioClipId).eqMidDb === -24, "eq band was not clamped");
+  const settled = ctx(actor);
+  actor.send({ type: "REMOVE_CLIP_KEYFRAME", clipId: "ghost", t: 0 });
+  actor.send({ type: "RESET_CLIP_MIX", clipId: "ghost" });
+  ok(ctx(actor).history === settled.history, "an unknown-clip mixer event disturbed the journal");
 });
 
 if (failures > 0) process.exit(1);
