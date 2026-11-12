@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Velocity GT — Concept Preview</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: grid; place-items: center;
+    background:
+      radial-gradient(1200px 600px at 50% 78%, rgba(64,120,255,.16), transparent 65%),
+      radial-gradient(900px 500px at 50% 20%, rgba(120,160,255,.10), transparent 60%),
+      linear-gradient(180deg, #0a0e1c 0%, #101830 55%, #0a0f20 100%);
+    font-family: "SF Pro Display", "Inter", -apple-system, "Segoe UI", sans-serif;
+    color: #dbe4f5; overflow-x: hidden;
+  }
+  .stage { text-align: center; padding: 48px 20px 40px; animation: rise .9s ease-out both; }
+  @keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+  .kicker { letter-spacing: .35em; text-transform: uppercase; font-size: 12px; color: #7f96c4; margin: 0 0 10px; }
+  h1 { margin: 0 0 6px; font-size: clamp(28px, 5vw, 46px); font-weight: 700; letter-spacing: .02em;
+       background: linear-gradient(180deg, #f4f8ff, #9db8e8); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .sub { color: #8ea4cd; font-size: 14px; margin: 0 0 26px; }
+  .car { width: min(92vw, 1040px); height: auto; filter: drop-shadow(0 30px 60px rgba(10,40,120,.45)); }
+  .floor { width: min(80vw, 720px); height: 1px; margin: -12px auto 26px;
+           background: linear-gradient(90deg, transparent, rgba(140,170,255,.35), transparent); }
+  .chips { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+  .chip { font-size: 12px; color: #a8bbe0; border: 1px solid rgba(140,170,255,.22);
+          background: rgba(60,90,160,.14); padding: 7px 14px; border-radius: 999px; letter-spacing: .08em; }
+  @media (prefers-reduced-motion: reduce) { .stage { animation: none; } }
+</style>
+</head>
+<body>
+  <main class="stage">
+    <p class="kicker">Concept Render</p>
+    <h1>Velocity&nbsp;GT</h1>
+    <p class="sub">Hand-drawn vector concept — pure SVG, no bitmaps</p>
+    <svg class="car" xmlns="http://www.w3.org/2000/svg" viewBox="100 150 1000 370" role="img" aria-label="Velocity GT - vector concept car">
+  <defs>
+    <linearGradient id="bodyGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#63a6ff"/><stop offset=".2" stop-color="#3d7bf0"/><stop offset=".58" stop-color="#2060d2"/><stop offset="1" stop-color="#123a8c"/>
+    </linearGradient>
+    <linearGradient id="glassGrad" x1="0" y1="0" x2=".35" y2="1">
+      <stop offset="0" stop-color="#eaf8ff"/><stop offset=".5" stop-color="#a5cfef"/><stop offset="1" stop-color="#6191c1"/>
+    </linearGradient>
+    <radialGradient id="tireGrad" cx=".5" cy=".5" r=".5">
+      <stop offset="0" stop-color="#1a1c20"/><stop offset=".72" stop-color="#101215"/><stop offset=".84" stop-color="#2b2e34"/><stop offset=".93" stop-color="#0b0c0e"/><stop offset="1" stop-color="#060708"/>
+    </radialGradient>
+    <radialGradient id="rimFace" cx=".5" cy=".4" r=".65">
+      <stop offset="0" stop-color="#272a30"/><stop offset=".6" stop-color="#34383f"/><stop offset=".78" stop-color="#8f979f"/><stop offset=".85" stop-color="#ccd1d8"/><stop offset="1" stop-color="#5f646b"/>
+    </radialGradient>
+    <linearGradient id="spokeGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#eef1f4"/><stop offset="1" stop-color="#959ba3"/>
+    </linearGradient>
+    <linearGradient id="hlGrad" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#8fd0ff"/></linearGradient>
+    <linearGradient id="tlGrad" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#ff7a52"/><stop offset="1" stop-color="#c21807"/></linearGradient>
+    <linearGradient id="ventGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0b1424"/><stop offset="1" stop-color="#243759"/></linearGradient>
+    <linearGradient id="shineGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".5" stop-color="#fff" stop-opacity=".85"/><stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="lowShade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".4"/></linearGradient>
+    <linearGradient id="topSheen" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".3"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
+    <filter id="blurS" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="3"/></filter>
+    <filter id="blurM" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="7"/></filter>
+    <filter id="blur1" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation=".8"/></filter>
+    <clipPath id="bodyClip"><path d="M150 410C146 392 144 372 146 356C147 336 148 318 152 306C156 298 162 292 170 289L180 284C188 289 198 291 210 290C254 282 302 266 342 258C396 234 448 208 504 196C526 190 550 188 572 188C620 192 666 208 706 232C726 244 744 252 762 256C812 266 872 272 928 278C962 282 996 288 1020 294C1048 302 1062 312 1068 326C1074 340 1075 354 1073 366C1071 380 1066 390 1055 396C1051 398 1046 400 1041 401L943.5 451A84 84 0 1 0 816.5 451L398.5 451A84 84 0 1 0 271.5 451L150 410Z"/></clipPath>
+    <clipPath id="glassClip"><path d="M410 264C446 244 480 224 514 208C538 200 560 197 582 198C630 202 676 218 712 240C724 248 736 253 746 256L750 259C640 266 510 269 420 267C414 266 411 265 410 264Z"/></clipPath>
+    <clipPath id="wellClip"><rect x="100" y="150" width="1000" height="320"/></clipPath>
+    <path id="spoke" d="M-4 -9C-7 -22 -8 -33 -7 -41L7 -41C8 -33 7 -22 4 -9Z"/>
+    <g id="wheel">
+      <circle r="74" fill="url(#tireGrad)"/>
+      <circle r="74" fill="none" stroke="#000" stroke-opacity=".4" stroke-width="2"/>
+      <circle r="47" fill="url(#rimFace)"/>
+      <circle r="43" fill="#14161a"/>
+      <g transform="rotate(25)"><rect x="15" y="-33" width="15" height="37" rx="6" fill="#d84a1b" stroke="#7c2408" stroke-width="1.5"/></g>
+      <g fill="url(#spokeGrad)">
+        <use href="#spoke"/><use href="#spoke" transform="rotate(72)"/><use href="#spoke" transform="rotate(144)"/><use href="#spoke" transform="rotate(216)"/><use href="#spoke" transform="rotate(288)"/>
+      </g>
+      <circle r="47" fill="none" stroke="#dfe3e8" stroke-opacity=".9" stroke-width="3"/>
+      <circle r="47" fill="none" stroke="#000" stroke-opacity=".35" stroke-width="1"/>
+      <circle r="10" fill="#23262b" stroke="#6a7078" stroke-width="2"/>
+      <circle r="4" fill="#a8afb8"/>
+    </g>
+  </defs>
+
+  <ellipse cx="600" cy="477" rx="450" ry="14" fill="#000" opacity=".35" filter="url(#blurM)"/>
+  <ellipse cx="600" cy="474" rx="300" ry="8" fill="#000" opacity=".3" filter="url(#blurS)"/>
+  <ellipse cx="335" cy="471" rx="66" ry="8" fill="#000" opacity=".4" filter="url(#blurS)"/>
+  <ellipse cx="880" cy="471" rx="66" ry="8" fill="#000" opacity=".4" filter="url(#blurS)"/>
+
+  <g clip-path="url(#wellClip)">
+    <circle cx="335" cy="396" r="84" fill="#05080f"/>
+    <circle cx="880" cy="396" r="84" fill="#05080f"/>
+  </g>
+
+  <path fill="url(#bodyGrad)" d="M150 410C146 392 144 372 146 356C147 336 148 318 152 306C156 298 162 292 170 289L180 284C188 289 198 291 210 290C254 282 302 266 342 258C396 234 448 208 504 196C526 190 550 188 572 188C620 192 666 208 706 232C726 244 744 252 762 256C812 266 872 272 928 278C962 282 996 288 1020 294C1048 302 1062 312 1068 326C1074 340 1075 354 1073 366C1071 380 1066 390 1055 396C1051 398 1046 400 1041 401L943.5 451A84 84 0 1 0 816.5 451L398.5 451A84 84 0 1 0 271.5 451L150 410Z"/>
+  <g clip-path="url(#bodyClip)">
+    <rect x="130" y="176" width="970" height="134" fill="url(#topSheen)"/>
+    <rect x="130" y="352" width="970" height="120" fill="url(#lowShade)"/>
+    <rect x="398" y="441" width="419" height="10" fill="#081527" opacity=".6"/>
+    <path d="M796 396A84 84 0 0 1 964 396" fill="none" stroke="#000" stroke-opacity=".3" stroke-width="8"/>
+    <path d="M251 396A84 84 0 0 1 419 396" fill="none" stroke="#000" stroke-opacity=".3" stroke-width="8"/>
+    <path d="M796 270L1000 294L988 306L790 282Z" fill="#fff" opacity=".1"/>
+    <path d="M468 318L548 312L526 358L448 362Z" fill="#fff" opacity=".07"/>
+    <path d="M208 300L296 288L288 318L202 330Z" fill="#fff" opacity=".06"/>
+    <path d="M930 328C780 320 640 316 540 320C470 323 420 328 396 334" fill="none" stroke="url(#shineGrad)" stroke-width="3.5" stroke-linecap="round" opacity=".55" filter="url(#blur1)"/>
+    <path d="M404 268C520 274 660 268 752 262" fill="none" stroke="#04102e" stroke-opacity=".25" stroke-width="4" filter="url(#blur1)"/>
+    <circle cx="1024" cy="310" r="26" fill="#cfe8ff" opacity=".4" filter="url(#blurM)"/>
+    <circle cx="1024" cy="310" r="12" fill="#ffffff" opacity=".45" filter="url(#blurS)"/>
+    <circle cx="157" cy="309" r="18" fill="#ff5a3c" opacity=".45" filter="url(#blurM)"/>
+  </g>
+  <path d="M506 198C566 188 640 196 700 220" fill="none" stroke="#fff" stroke-opacity=".38" stroke-width="2.5" filter="url(#blur1)"/>
+  <path fill="none" stroke="#0a1c3f" stroke-opacity=".4" stroke-width="1.5" d="M150 410C146 392 144 372 146 356C147 336 148 318 152 306C156 298 162 292 170 289L180 284C188 289 198 291 210 290C254 282 302 266 342 258C396 234 448 208 504 196C526 190 550 188 572 188C620 192 666 208 706 232C726 244 744 252 762 256C812 266 872 272 928 278C962 282 996 288 1020 294C1048 302 1062 312 1068 326C1074 340 1075 354 1073 366C1071 380 1066 390 1055 396C1051 398 1046 400 1041 401L943.5 451A84 84 0 1 0 816.5 451L398.5 451A84 84 0 1 0 271.5 451L150 410Z"/>
+
+  <path d="M410 264C446 244 480 224 514 208C538 200 560 197 582 198C630 202 676 218 712 240C724 248 736 253 746 256L750 259C640 266 510 269 420 267C414 266 411 265 410 264Z" fill="url(#glassGrad)" opacity=".96"/>
+  <g clip-path="url(#glassClip)">
+    <path d="M560 206L620 206L496 266L446 266Z" fill="#fff" opacity=".18"/>
+    <path d="M694 234L748 258L700 258Z" fill="#fff" opacity=".12"/>
+    <path d="M410 264C446 244 480 224 514 208C538 200 560 197 582 198C630 202 676 218 712 240C724 248 736 253 746 256L750 259C640 266 510 269 420 267C414 266 411 265 410 264Z" fill="none" stroke="#0b2a5e" stroke-opacity=".35" stroke-width="2"/>
+  </g>
+  <path d="M576 200L588 201L596 264L582 263Z" fill="#0f2c63"/>
+
+  <path d="M598 266C592 326 584 392 578 446" fill="none" stroke="#0a2050" stroke-opacity=".5" stroke-width="2"/>
+  <rect x="622" y="285" width="36" height="7" rx="3.5" fill="#0f3c85" opacity=".85"/>
+  <rect x="624" y="286.5" width="30" height="2.5" rx="1.2" fill="#7db4ff" opacity=".5"/>
+
+  <path d="M460 394L520 389L514 430L455 434C449 422 452 404 460 394Z" fill="url(#ventGrad)"/>
+  <path d="M470 396L467 428M484 394L481 427M498 392L495 426" stroke="#3d5378" stroke-opacity=".5" stroke-width="2.5"/>
+
+  <path d="M440 217C448 204 458 197 466 197C468 202 468 208 464 213L456 217Z" fill="#173e86"/>
+
+  <path d="M1006 304L1062 312L1050 328L998 318Z" fill="url(#hlGrad)"/>
+  <path d="M1006 304L1062 312L1050 328L998 318Z" fill="none" stroke="#dff1ff" stroke-opacity=".6" stroke-width="1"/>
+  <path d="M994 324L1046 332" stroke="#bfe3ff" stroke-width="2" stroke-opacity=".7" stroke-linecap="round"/>
+
+  <path d="M149 307C156 304 164 301 172 299L174 312C165 315 157 318 151 320Z" fill="url(#tlGrad)"/>
+
+  <path d="M1024 370L1058 375C1062 383 1059 390 1051 393L1023 389C1018 383 1018 375 1024 370Z" fill="#0a1626" opacity=".9"/>
+
+  <path d="M744 252C740 245 743 239 751 237C760 235 766 240 764 248C762 255 754 257 748 255Z" fill="#1c4fa6"/>
+  <path d="M751 239C756 238 760 241 759 245" stroke="#9fd0ff" stroke-width="1.5" fill="none" opacity=".7"/>
+  <path d="M748 254L744 259" stroke="#12306b" stroke-width="3" stroke-linecap="round"/>
+
+  <use href="#wheel" transform="translate(335 396)"/>
+  <use href="#wheel" transform="translate(880 396)"/>
+
+    </svg>
+    <div class="floor"></div>
+    <div class="chips">
+      <span class="chip">0–100 · 2.9 s</span><span class="chip">850 hp</span><span class="chip">Top speed · 340 km/h</span>
+    </div>
+  </main>
+</body>
+</html>
