@@ -5,6 +5,7 @@ import { fluxcutMachine, statusOf } from "./machine";
 import type { FluxcutContext as FluxcutMachineContext, FluxcutStatus } from "./machine";
 import { RESOLUTIONS } from "./convert";
 import { aspectLabel, fmtBytes, fmtTime } from "./video";
+import { canRedo, canUndo } from "./history";
 import {
   compToSource,
   compositionEnd,
@@ -109,6 +110,10 @@ export function useFluxcutActions() {
       addMediaClip: (trackId: TrackId, file: File) => send({ type: "ADD_MEDIA_CLIP", trackId, file }),
       pickTrackMedia: (trackId: TrackId) => send({ type: "REQUEST_PICK_TRACK_MEDIA", trackId }),
 
+      // ---- history ----
+      undo: () => send({ type: "UNDO" }),
+      redo: () => send({ type: "REDO" }),
+
       // ---- element lifecycle (ruler + file input) ----
       attachInput: (element: HTMLInputElement) => send({ type: "ATTACH_INPUT", element }),
       attachStrip: (element: HTMLDivElement) => send({ type: "ATTACH_STRIP", element }),
@@ -181,6 +186,21 @@ export function useFluxcutBusy(): boolean {
     const st = statusOf(s);
     return st === "downloading" || st === "loading" || st === "converting";
   });
+}
+
+/* ---------- history view model: undo availability ---------- */
+
+export interface FluxcutHistoryView {
+  canUndo: boolean;
+  canRedo: boolean;
+}
+
+function selectHistoryView(s: FluxcutSnapshot): FluxcutHistoryView {
+  return { canUndo: canUndo(s.context.history), canRedo: canRedo(s.context.history) };
+}
+
+export function useFluxcutHistory(): FluxcutHistoryView {
+  return useFluxcutSelector(selectHistoryView, shallowEqual);
 }
 
 /* ---------- view model: the snapshot, pre-formatted ---------- */
