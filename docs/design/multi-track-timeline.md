@@ -53,7 +53,7 @@ Context additions: `timeline: Timeline`, `selectedClipId: ClipId | null`,
 
 Events: ADD_TRACK, REMOVE_TRACK, MOVE_TRACK {trackId, dir: -1|1} (within its section),
 ADD_TEXT_CLIP, SET_CLIP_TEXT, SELECT_CLIP, CLIP_DELETE,
-ADD_MEDIA_CLIP {trackId, file} (enters a transient `addingClip` state invoking `probeMedia`),
+ADD_MEDIA_CLIP {trackId, file} (enters a transient `addingClip` state invoking `probeMedia`; the placed clip becomes selected for immediate feedback),
 CLIP_DRAG_START {clipId, mode, time}, CLIP_DRAG_MOVE {time}, CLIP_DRAG_END,
 SEEK/PLAY/PAUSE/TOGGLE_PLAY (repurposed to the composition clock — same names, new semantics),
 TIMELINE_TICK {dt} (internal), SET_IN_POINT/SET_OUT_POINT (comp->source projection).

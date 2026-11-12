@@ -10,7 +10,7 @@ import {
   AudioLines,
   type LucideIcon,
 } from "lucide-react";
-import { DEMO_THUMBS, useFluxcutActions, useTimelineView } from "../lib/useFluxcut";
+import { DEMO_THUMBS, useFluxcutActions, useFluxcutBusy, useTimelineView } from "../lib/useFluxcut";
 import type { ClipView, LaneView } from "../lib/useFluxcut";
 import type { ClipDragMode, TrackKind } from "../lib/timeline";
 
@@ -45,6 +45,7 @@ const KIND_ADD_TITLE: Record<TrackKind, string> = {
  */
 export default function Timeline() {
   const actions = useFluxcutActions();
+  const busy = useFluxcutBusy();
   const view = useTimelineView();
 
   // Hand the ruler to the machine for scrubbing (React 19 ref cleanup)
@@ -137,6 +138,7 @@ export default function Timeline() {
                 <span className="lane-name">{lane.name}</span>
                 <button
                   className="lane-btn"
+                  disabled={busy}
                   title={KIND_ADD_TITLE[lane.kind]}
                   onClick={() =>
                     lane.kind === "text" ? actions.addTextClip(lane.id) : actions.pickTrackMedia(lane.id)
@@ -146,21 +148,21 @@ export default function Timeline() {
                 </button>
                 <button
                   className="lane-btn"
+                  disabled={busy || !lane.canUp}
                   title="Move track up"
-                  disabled={!lane.canUp}
                   onClick={() => actions.moveTrack(lane.id, -1)}
                 >
                   <ArrowUp />
                 </button>
                 <button
                   className="lane-btn"
+                  disabled={busy || !lane.canDown}
                   title="Move track down"
-                  disabled={!lane.canDown}
                   onClick={() => actions.moveTrack(lane.id, 1)}
                 >
                   <ArrowDown />
                 </button>
-                <button className="lane-btn" title="Remove track" onClick={() => actions.removeTrack(lane.id)}>
+                <button className="lane-btn" disabled={busy} title="Remove track" onClick={() => actions.removeTrack(lane.id)}>
                   <X />
                 </button>
               </div>
@@ -180,7 +182,7 @@ export default function Timeline() {
           <div className="lane-add" style={{ gridRow: laneRows }}>
             <span>Add track</span>
             {(["video", "image", "text", "audio"] as const).map((kind) => (
-              <button key={kind} className="lane-add-btn" onClick={() => actions.addTrack(kind)}>
+              <button key={kind} className="lane-add-btn" disabled={busy} onClick={() => actions.addTrack(kind)}>
                 <Plus />
                 {KIND_LABEL[kind]}
               </button>

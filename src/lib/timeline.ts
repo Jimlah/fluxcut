@@ -240,7 +240,12 @@ export function setClipText(tl: Timeline, clipId: ClipId, text: string): Timelin
 }
 
 /** Inserts an asset-backed clip at `start` (pushed right past any blocker). */
-export function addMediaClip(tl: Timeline, trackId: TrackId, asset: Asset, start: Sec): Timeline | null {
+export function addMediaClip(
+  tl: Timeline,
+  trackId: TrackId,
+  asset: Asset,
+  start: Sec
+): { timeline: Timeline; clipId: ClipId } | null {
   const track = findTrack(tl, trackId);
   if (!track || track.kind !== asset.kind) return null;
   const duration = asset.kind === "image" ? GROWTH_PLACEHOLDER_SEC : asset.duration;
@@ -252,7 +257,10 @@ export function addMediaClip(tl: Timeline, trackId: TrackId, asset: Asset, start
       : asset.kind === "audio"
         ? { id: newClipId(), kind: "audio", start: at, duration, assetId: asset.id, sourceStart: 0 }
         : { id: newClipId(), kind: "image", start: at, duration, assetId: asset.id };
-  return withTrack(registerAsset(tl, asset), trackId, (t) => ({ ...t, clips: [...t.clips, clip] }) as Track);
+  return {
+    timeline: withTrack(registerAsset(tl, asset), trackId, (t) => ({ ...t, clips: [...t.clips, clip] }) as Track),
+    clipId: clip.id,
+  };
 }
 
 /** Inserts a 3s text clip at `start`; returns the new clip id for selection. */

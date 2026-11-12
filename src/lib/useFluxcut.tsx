@@ -169,9 +169,10 @@ export function useFluxcutStatus(): FluxcutStatus {
   return useFluxcutSelector(statusOf);
 }
 
-/** True while any blocking workflow is active (fetching/inspecting/converting). */
+/** True while any blocking workflow is active, probing media included. */
 export function useFluxcutBusy(): boolean {
   return useFluxcutSelector((s) => {
+    if (s.hasTag("addingClip")) return true;
     const st = statusOf(s);
     return st === "downloading" || st === "loading" || st === "converting";
   });

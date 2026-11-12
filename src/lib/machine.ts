@@ -311,8 +311,12 @@ const probeMedia = fromPromise<{ asset: Asset; trackId: TrackId }, { file: File;
         { once: true }
       );
     });
+    // Snapshot the media facts BEFORE releasing the decoder — after
+    // removeAttribute("src") the element reports duration/size as 0/NaN.
+    const duration = video.duration || 0;
+    const w = video.videoWidth;
+    const h = video.videoHeight;
     const frames = await captureFilmstrip(video, 10);
-    // release the decoder
     video.removeAttribute("src");
     video.load();
     return {
@@ -322,9 +326,9 @@ const probeMedia = fromPromise<{ asset: Asset; trackId: TrackId }, { file: File;
         kind: "video",
         name: file.name,
         url,
-        duration: video.duration || 0,
-        w: video.videoWidth,
-        h: video.videoHeight,
+        duration,
+        w,
+        h,
         poster: frames[0] ?? "",
         frames,
       },
@@ -1149,6 +1153,7 @@ export const fluxcutMachine = setup({
 
     // Transient: probing one track-media file before placing its clip
     addingClip: {
+      tags: "addingClip",
       invoke: {
         src: "probeMedia",
         input: ({ context, event }) => {
@@ -1164,9 +1169,11 @@ export const fluxcutMachine = setup({
               event.output.asset,
               context.time
             );
-            return next
-              ? resolveTimeline(context, next)
-              : { error: "That file doesn't fit this track." };
+            if (!next) return { error: "That file doesn't fit this track." };
+            return {
+              ...resolveTimeline(context, next.timeline),
+              selectedClipId: next.clipId,
+            };
           }),
         },
         onError: {
