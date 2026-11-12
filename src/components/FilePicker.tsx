@@ -1,13 +1,19 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { useFluxcutActions, useFluxcutFields } from "../lib/useFluxcut";
 
 /**
- * The single hidden file input. The machine opens it for the main video, or —
- * when a track pick is pending (pickTarget) — for a kind-filtered track clip.
+ * The single hidden file input. The machine bumps pickNonce for the main
+ * video or for a kind-filtered track clip; the effect below clicks the input
+ * only after the accept attribute has re-rendered, so each lane kind opens
+ * with the right filter.
  */
 export default function FilePicker() {
   const actions = useFluxcutActions();
-  const { pickTarget, pickAccept } = useFluxcutFields(["pickTarget", "pickAccept"]);
+  const { pickTarget, pickAccept, pickNonce } = useFluxcutFields([
+    "pickTarget",
+    "pickAccept",
+    "pickNonce",
+  ]);
 
   const attachInput = useCallback(
     (el: HTMLInputElement | null) => {
@@ -16,9 +22,15 @@ export default function FilePicker() {
     [actions]
   );
 
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (pickNonce === 0) return;
+    inputRef.current?.click();
+  }, [pickNonce]);
+
   return (
     <input
-      ref={attachInput}
+      ref={(el) => { inputRef.current = el; attachInput(el); }}
       type="file"
       accept={pickAccept}
       hidden

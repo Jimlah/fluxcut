@@ -157,6 +157,8 @@ export interface FluxcutContext {
   pickTarget: TrackId | null;
   /** accept attribute for the pending pick */
   pickAccept: string;
+  /** Incremented per pick request; FilePicker clicks the input on change, after accept is rendered */
+  pickNonce: number;
   /** URL being fetched for a remote-video load */
   pendingUrl: string | null;
   projectName: string;
@@ -201,6 +203,7 @@ const defaultContext: FluxcutContext = {
   fileInput: null,
   pickTarget: null,
   pickAccept: DEFAULT_VIDEO_ACCEPT,
+  pickNonce: 0,
   pendingUrl: null,
   projectName: "Untitled conversion",
   panelOpen: true,
@@ -605,6 +608,7 @@ export const fluxcutMachine = setup({
       drag: null,
       pickTarget: null,
       pickAccept: DEFAULT_VIDEO_ACCEPT,
+      pickNonce: 0,
     }),
   },
 }).createMachine({
@@ -770,15 +774,13 @@ export const fluxcutMachine = setup({
     },
     // ---- media ingest for tracks ----
     REQUEST_PICK_TRACK_MEDIA: {
-      actions: [
-        ({ context }) => {
-          context.fileInput?.click();
-        },
-        assign(({ context, event }) => ({
-          pickTarget: event.trackId,
-          pickAccept: trackAccept(findTrack(context.timeline, event.trackId)?.kind),
-        })),
-      ],
+      // FilePicker opens the dialog after this state has rendered the accept
+      // attr; clicking inside the action would race the attribute update.
+      actions: assign(({ context, event }) => ({
+        pickTarget: event.trackId,
+        pickAccept: trackAccept(findTrack(context.timeline, event.trackId)?.kind),
+        pickNonce: context.pickNonce + 1,
+      })),
     },
     // ---- chrome ----
     SET_PROJECT_NAME: {
@@ -809,13 +811,13 @@ export const fluxcutMachine = setup({
       }),
     },
     REQUEST_PICK_FILE: {
-      actions: [
-        ({ context }) => {
-          context.fileInput?.click();
-        },
-        // Opening the picker implies wanting to see the convert panel again
-        assign({ panelOpen: true, pickTarget: null, pickAccept: DEFAULT_VIDEO_ACCEPT }),
-      ],
+      // Opening the picker implies wanting to see the convert panel again
+      actions: assign(({ context }) => ({
+        panelOpen: true,
+        pickTarget: null,
+        pickAccept: DEFAULT_VIDEO_ACCEPT,
+        pickNonce: context.pickNonce + 1,
+      })),
     },
   },
   states: {
