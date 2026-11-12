@@ -46,6 +46,7 @@ Invariants (enforced by pure helpers in `src/lib/timeline.ts`, never by UI):
 - z-order is derivable from track position. Never stored per clip or per track.
 - Same-track clips never overlap. Helpers return `null` on an illegal placement; the caller keeps the previous state.
 - `sourceStart` only exists on file-backed media with a duration (video/audio); resize clamps `sourceStart + duration <= asset.duration`.
+- Speed: media clips carry `speed` in composition-seconds-per-source-second (0.25 to 8, default 1), so `sourceLen = duration * speed` and the source bound reads `sourceStart + duration * speed <= asset.duration`.
 - Min clip duration 0.2s everywhere.
 - Composition end: `compositionEnd(tl) = max(clip.start + clip.duration)`, floor 0.
 
@@ -57,7 +58,8 @@ Context additions: `timeline: Timeline`, `selectedClipId: ClipId | null`,
 Events: ADD_TRACK, REMOVE_TRACK, MOVE_TRACK {trackId, dir: -1|1} (within its section),
 ADD_TEXT_CLIP, SET_CLIP_TEXT, SELECT_CLIP, CLIP_DELETE,
 ADD_MEDIA_CLIP {trackId, file} (enters a transient `addingClip` state invoking `probeMedia`; the placed clip becomes selected for immediate feedback),
-CLIP_DRAG_START {clipId, mode, time}, CLIP_DRAG_MOVE {time}, CLIP_DRAG_END,
+CLIP_DRAG_START {clipId, mode, time}, CLIP_DRAG_MOVE {time}, CLIP_DRAG_END (mode gains "slip" and "slide"),
+CUT_CLIP {clipId, time} (razor split; the right piece is selected), CLIP_DELETE_RIPPLE {clipId} (delete + close the gap), SET_CLIP_SPEED {clipId, speed},
 SEEK/PLAY/PAUSE/TOGGLE_PLAY (repurposed to the composition clock — same names, new semantics),
 TIMELINE_TICK {dt} (internal), SET_IN_POINT/SET_OUT_POINT (comp->source projection).
 
