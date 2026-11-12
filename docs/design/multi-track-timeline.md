@@ -101,7 +101,7 @@ All active audio plays unmuted (Premiere parity); overlapping audio is accepted 
 
 ## Out of scope for v1 (accepted tradeoffs — do not add)
 
-Zoom/scroll, snapping, undo/clipboard, waveform render, keyframes/effects, opacity/blend,
+Zoom/scroll, snapping, clipboard, waveform render, keyframes/effects, opacity/blend,
 composition export, persistence, audio mixer/volume, cross-track clip moves, decoder caps
 (v1 timelines are small), silent-pausing in hidden tabs (rAF).
 
