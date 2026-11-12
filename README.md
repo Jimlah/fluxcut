@@ -40,7 +40,7 @@ The mediabunny engine chunk (~700 kB) is lazy-loaded on first conversion.
 
 | Asset | Source |
 | --- | --- |
-| Hero video — "Golden particles with abstract nebula shapes" | [Mixkit](https://mixkit.co/free-stock-video/gold-particles/) |
+| Hero video + default timeline sample — "Golden particles with abstract nebula shapes" (720p stream + 360p copy vendored at `public/samples/`) | [Mixkit](https://mixkit.co/free-stock-video/gold-particles/) |
 | Demo filmstrip stills (festival, smoke, glitter, fire…) | [Mixkit](https://mixkit.co) |
 | Inter + Space Grotesk typefaces | [Google Fonts](https://fonts.google.com) |
 | Icons | [Lucide](https://lucide.dev) (npm: lucide-react) |

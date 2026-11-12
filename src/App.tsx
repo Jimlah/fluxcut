@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { Film, Play } from "lucide-react";
 import Rail from "./components/Rail";
 import TopBar from "./components/TopBar";
@@ -11,6 +12,10 @@ import { FluxcutProvider, useFluxcutActions, useFluxcutBusy, useFluxcutSelector 
 // Hero video fetched from the internet (see README credits)
 const HERO_VIDEO = "https://assets.mixkit.co/videos/26789/26789-720.mp4"; // golden particle nebula
 
+// Default project media: the same clip vendored locally (same-origin, CORS-safe)
+// so a fresh session opens with the multi-track timeline already populated.
+const DEFAULT_SAMPLE = "samples/golden-particles.mp4";
+
 export default function App() {
   return (
     <FluxcutProvider>
@@ -22,6 +27,19 @@ export default function App() {
 /** Composition shell — every widget pulls its own state from the machine. */
 function Studio() {
   const actions = useFluxcutActions();
+
+  // Auto-load the vendored sample once per session; failures leave the demo state.
+  const sampleTried = useRef(false);
+  useEffect(() => {
+    if (sampleTried.current) return;
+    sampleTried.current = true;
+    const file = fetch(DEFAULT_SAMPLE)
+      .then((res) => res.ok ? res.blob() : Promise.reject(new Error("fetch " + res.status)))
+      .then((blob) => new File([blob], "golden-particles.mp4", { type: "video/mp4" }))
+      .then((f) => actions.loadFile(f))
+      .catch(() => {});
+    void file;
+  }, [actions]);
 
   const fileUrl = useFluxcutSelector((s) => s.context.fileUrl);
   const hasTracks = useFluxcutSelector((s) => s.context.timeline.tracks.length > 0);
