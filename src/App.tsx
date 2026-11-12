@@ -1,8 +1,8 @@
-import { useCallback } from "react";
 import { Film, Play } from "lucide-react";
 import Rail from "./components/Rail";
 import TopBar from "./components/TopBar";
 import Timeline from "./components/Timeline";
+import Compositor from "./components/Compositor";
 import BottomBar from "./components/BottomBar";
 import ConvertPanel from "./components/ConvertPanel";
 import FilePicker from "./components/FilePicker";
@@ -24,19 +24,11 @@ function Studio() {
   const actions = useFluxcutActions();
 
   const fileUrl = useFluxcutSelector((s) => s.context.fileUrl);
+  const hasTracks = useFluxcutSelector((s) => s.context.timeline.tracks.length > 0);
   const playing = useFluxcutSelector((s) => s.context.playing);
   const busy = useFluxcutBusy();
   const dragOver = useFluxcutSelector((s) => s.context.dragOver);
   const gridOn = useFluxcutSelector((s) => s.context.gridOn);
-
-  // Hand the stage <video> element to the machine (React 19 ref cleanup)
-  const attachVideo = useCallback(
-    (el: HTMLVideoElement | null) => {
-      if (el) actions.attachVideo(el);
-      return () => actions.detachVideo();
-    },
-    [actions]
-  );
 
   // Keyboard shortcuts live inside the machine (invoked keyboardActor).
 
@@ -45,14 +37,8 @@ function Studio() {
       <div className={`app-window${dragOver ? " dragging" : ""}`}>
         {/* ===== stage ===== */}
         <div className="stage">
-          {fileUrl ? (
-            <video
-              ref={attachVideo}
-              className="stage-media"
-              src={fileUrl}
-              onClick={() => actions.togglePlay()}
-              playsInline
-            />
+          {hasTracks ? (
+            <Compositor />
           ) : (
             <video className="stage-media" src={HERO_VIDEO} autoPlay loop muted playsInline />
           )}

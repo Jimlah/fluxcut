@@ -7,15 +7,40 @@
 //                                       └─────AGAIN / settings─────────┘
 //
 // Global actors (invoked at machine root, alive for the machine's lifetime):
-//   - dragDropActor  : window drag & drop → DRAG_OVER / DROP_FILE
-//   - videoSyncActor : the stage <video> element → SET_TIME / SET_PLAYING / SET_DURATION
-// React hands DOM elements over via ATTACH_VIDEO / ATTACH_INPUT; playback
-// commands (PLAY / PAUSE / TOGGLE_PLAY / SEEK / SEEK_BY) act on context.videoEl.
+//   - dragDropActor : window drag & drop → DRAG_OVER / DROP_FILE
+//   - clockActor    : rAF composition clock → TIMELINE_TICK(dt)
+//   - clipDragActor : clip drag/resize pointer capture → CLIP_DRAG_MOVE/END
+// The machine owns composition time: context.time advances through the clock
+// actor and media elements are nudged toward it — no element reports time back.
 import { setup, assign, fromPromise, fromCallback, raise, sendTo } from "xstate";
 import type { Conversion } from "mediabunny";
 import { runConversion, probeSupportedFormats } from "./convert";
 import { captureFilmstrip } from "./video";
 import type { FileMeta, ResultInfo, TrimRange } from "./types";
+import {
+  EMPTY_TIMELINE,
+  MIN_CLIP_SEC,
+  addMediaClip,
+  addTextClip,
+  addTrack,
+  bootstrapMainVideo,
+  compToSource,
+  compositionEnd,
+  deleteClip,
+  findClip,
+  findTrack,
+  moveTrack,
+  newAssetId,
+  planClipDrag,
+  removeTrack,
+  setClipText,
+  type Asset,
+  type ClipDragMode,
+  type ClipId,
+  type Timeline,
+  type TrackId,
+  type TrackKind,
+} from "./timeline";
 
 /* ---------- actor payloads ---------- */
 
@@ -57,29 +82,44 @@ export type FluxcutEvent =
   | { type: "CONVERT" }
   | { type: "CANCEL" }
   | { type: "AGAIN" }
-  | { type: "SET_TIME"; time: number }
-  | { type: "SET_PLAYING"; playing: boolean }
   | { type: "TOGGLE_GRID" }
   | { type: "DRAG_OVER"; over: boolean }
   | { type: "DROP_FILE"; file: File }
-  | { type: "ATTACH_VIDEO"; element: HTMLVideoElement }
-  | { type: "DETACH_VIDEO" }
   | { type: "ATTACH_INPUT"; element: HTMLInputElement }
+  | { type: "ATTACH_STRIP"; element: HTMLDivElement }
+  | { type: "DETACH_STRIP" }
+  | { type: "DRAG_STRIP"; clientX: number }
+  | { type: "STRIP_SEEK"; pct: number }
   | { type: "PLAY" }
   | { type: "PAUSE" }
   | { type: "TOGGLE_PLAY" }
   | { type: "SEEK"; time: number }
   | { type: "SEEK_BY"; delta: number }
-  | { type: "ATTACH_STRIP"; element: HTMLDivElement }
-  | { type: "DETACH_STRIP" }
-  | { type: "DRAG_STRIP"; clientX: number }
-  | { type: "STRIP_SEEK"; pct: number }
-  | { type: "SET_DURATION"; duration: number }
+  | { type: "TIMELINE_TICK"; dt: number }
+  | { type: "ADD_TRACK"; kind: TrackKind }
+  | { type: "REMOVE_TRACK"; trackId: TrackId }
+  | { type: "MOVE_TRACK"; trackId: TrackId; dir: -1 | 1 }
+  | { type: "ADD_TEXT_CLIP"; trackId: TrackId }
+  | { type: "SET_CLIP_TEXT"; clipId: ClipId; text: string }
+  | { type: "SELECT_CLIP"; clipId: ClipId | null }
+  | { type: "CLIP_DELETE"; clipId: ClipId }
+  | {
+      type: "CLIP_DRAG_START";
+      clipId: ClipId;
+      mode: ClipDragMode;
+      time: number;
+      element: HTMLDivElement;
+      seconds: number;
+    }
+  | { type: "CLIP_DRAG_MOVE"; time: number }
+  | { type: "CLIP_DRAG_END" }
+  | { type: "REQUEST_PICK_FILE" }
+  | { type: "REQUEST_PICK_TRACK_MEDIA"; trackId: TrackId }
+  | { type: "ADD_MEDIA_CLIP"; trackId: TrackId; file: File }
   | { type: "SET_PROJECT_NAME"; name: string }
   | { type: "SET_PANEL_OPEN"; open: boolean }
   | { type: "TOGGLE_PANEL" }
   | { type: "SET_TOOL"; tool: string }
-  | { type: "REQUEST_PICK_FILE" }
   | { type: "SET_CAPABILITIES"; formats: string[] }
   | ConvertSentEvent;
 
@@ -99,16 +139,24 @@ export interface FluxcutContext {
   error: string;
   result: ResultInfo | null;
   handle: Conversion | null;
+  /** Machine-owned composition clock — never read from a media element. */
   time: number;
   playing: boolean;
   gridOn: boolean;
   dragOver: boolean;
-  /** Live reference to the stage video element — attached from React */
-  videoEl: HTMLVideoElement | null;
+  /** Multi-track project state (assets + ordered tracks), see lib/timeline.ts */
+  timeline: Timeline;
+  selectedClipId: ClipId | null;
+  /** Live clip drag; anchorTime is the last accepted pointer time. */
+  drag: { clipId: ClipId; mode: ClipDragMode; anchorTime: number } | null;
+  /** Timeline ruler element — attached from the Timeline component */
+  stripEl: HTMLDivElement | null;
   /** Hidden file input element — attached from the FilePicker component */
   fileInput: HTMLInputElement | null;
-  /** Timeline strip element — attached from the Timeline component */
-  stripEl: HTMLDivElement | null;
+  /** Track targeted by a track-media pick; null means the main video. */
+  pickTarget: TrackId | null;
+  /** accept attribute for the pending pick */
+  pickAccept: string;
   /** URL being fetched for a remote-video load */
   pendingUrl: string | null;
   projectName: string;
@@ -118,6 +166,14 @@ export interface FluxcutContext {
   supportedFormats: string[];
   /** False until the capability probe has reported */
   capsProbed: boolean;
+}
+
+const DEFAULT_VIDEO_ACCEPT = "video/*,.mkv,.ts,.m4v";
+
+function trackAccept(kind: TrackKind | undefined): string {
+  if (kind === "audio") return "audio/*";
+  if (kind === "image") return "image/*";
+  return DEFAULT_VIDEO_ACCEPT;
 }
 
 const defaultContext: FluxcutContext = {
@@ -138,9 +194,13 @@ const defaultContext: FluxcutContext = {
   playing: false,
   gridOn: false,
   dragOver: false,
-  videoEl: null,
-  fileInput: null,
+  timeline: EMPTY_TIMELINE,
+  selectedClipId: null,
+  drag: null,
   stripEl: null,
+  fileInput: null,
+  pickTarget: null,
+  pickAccept: DEFAULT_VIDEO_ACCEPT,
   pendingUrl: null,
   projectName: "Untitled conversion",
   panelOpen: true,
@@ -148,6 +208,20 @@ const defaultContext: FluxcutContext = {
   supportedFormats: [],
   capsProbed: false,
 };
+
+/* ---------- actions helpers ---------- */
+
+/** Adopts a projected timeline (or keeps the old one) and drops dead selections. */
+function resolveTimeline(context: FluxcutContext, next: Timeline | null): Partial<FluxcutContext> {
+  if (!next) return {};
+  return {
+    timeline: next,
+    selectedClipId:
+      context.selectedClipId && findClip(next, context.selectedClipId)
+        ? context.selectedClipId
+        : null,
+  };
+}
 
 /* ---------- actors ---------- */
 
@@ -180,6 +254,83 @@ const loadVideoMeta = fromPromise<LoadOutput, { file: File }>(async ({ input }) 
   video.load();
   return { fileUrl, meta, frames };
 });
+
+// Reads any media file into a timeline Asset; the target trackId rides on the
+// output so the caller can place the clip when the probe lands.
+const probeMedia = fromPromise<{ asset: Asset; trackId: TrackId }, { file: File; trackId: TrackId }>(
+  async ({ input }) => {
+    const { file, trackId } = input;
+    const isVideo = file.type.startsWith("video/") || /\.(mkv|ts|m4v)$/i.test(file.name);
+    const isAudio = file.type.startsWith("audio/");
+    const isImage = file.type.startsWith("image/");
+    if (!isVideo && !isAudio && !isImage) throw new Error("Unsupported file type.");
+    const url = URL.createObjectURL(file);
+    if (isImage) {
+      const img = new Image();
+      img.src = url;
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error("Couldn't decode this image."));
+      });
+      return {
+        trackId,
+        asset: {
+          id: newAssetId(),
+          kind: "image",
+          name: file.name,
+          url,
+          w: img.naturalWidth,
+          h: img.naturalHeight,
+        },
+      };
+    }
+    if (isAudio) {
+      const audio = document.createElement("audio");
+      audio.preload = "metadata";
+      audio.src = url;
+      const duration = await new Promise<number>((resolve, reject) => {
+        audio.addEventListener("loadedmetadata", () => resolve(audio.duration || 0), { once: true });
+        audio.addEventListener(
+          "error",
+          () => reject(new Error("Couldn't decode this audio file.")),
+          { once: true }
+        );
+      });
+      return { trackId, asset: { id: newAssetId(), kind: "audio", name: file.name, url, duration } };
+    }
+    // Same decode + filmstrip pass as the main-file probe
+    const video = document.createElement("video");
+    video.preload = "auto";
+    video.muted = true;
+    video.src = url;
+    await new Promise<void>((resolve, reject) => {
+      video.addEventListener("loadedmetadata", () => resolve(), { once: true });
+      video.addEventListener(
+        "error",
+        () => reject(new Error("Couldn't decode this file in your browser.")),
+        { once: true }
+      );
+    });
+    const frames = await captureFilmstrip(video, 10);
+    // release the decoder
+    video.removeAttribute("src");
+    video.load();
+    return {
+      trackId,
+      asset: {
+        id: newAssetId(),
+        kind: "video",
+        name: file.name,
+        url,
+        duration: video.duration || 0,
+        w: video.videoWidth,
+        h: video.videoHeight,
+        poster: frames[0] ?? "",
+        frames,
+      },
+    };
+  }
+);
 
 // Downloads a remote video as a Blob and hands it over as a File so it can
 // flow through the normal LOAD_FILE pipeline. Subject to CORS like any fetch.
@@ -276,62 +427,73 @@ const keyboardActor = fromCallback<FluxcutEvent>(({ sendBack }) => {
   return () => window.removeEventListener("keydown", onKey);
 });
 
-// Owns the media-element wiring: React hands the stage <video> over via
-// ATTACH/DETACH (relayed by the machine with sendTo), and this actor streams
-// time, playing state and duration back as events.
-type VideoSyncEvent =
-  | { type: "ATTACH"; element: HTMLVideoElement }
-  | { type: "DETACH" }
-  | { type: "SET_TIME"; time: number }
-  | { type: "SET_PLAYING"; playing: boolean }
-  | { type: "SET_DURATION"; duration: number };
+// Composition clock: rAF ticks while started; the machine folds each dt into
+// context.time (looping at compositionEnd). No media element reports time back.
+const clockActor = fromCallback<{ type: "CLOCK_START" } | { type: "CLOCK_STOP" }, undefined, { type: "TIMELINE_TICK"; dt: number }>(
+  ({ sendBack, receive }) => {
+    let raf = 0;
+    let last = 0;
+    const loop = (now: number) => {
+      sendBack({ type: "TIMELINE_TICK", dt: Math.min(1, (now - last) / 1000) });
+      last = now;
+      raf = requestAnimationFrame(loop);
+    };
+    const start = () => {
+      if (raf) return;
+      last = performance.now();
+      raf = requestAnimationFrame(loop);
+    };
+    const stop = () => {
+      if (!raf) return;
+      cancelAnimationFrame(raf);
+      raf = 0;
+    };
+    receive((event) => {
+      if (event.type === "CLOCK_START") start();
+      if (event.type === "CLOCK_STOP") stop();
+    });
+    return () => stop();
+  }
+);
 
-const videoSyncActor = fromCallback<VideoSyncEvent, undefined>(({ sendBack, receive }) => {
-  let el: HTMLVideoElement | null = null;
-
-  const onTime = () => {
-    // Skip timeupdate noise while the user is dragging the playhead
-    if (el && !el.seeking) sendBack({ type: "SET_TIME", time: el.currentTime });
-  };
-  const onSeeked = () => {
-    if (el) sendBack({ type: "SET_TIME", time: el.currentTime });
-  };
-  const onPlay = () => sendBack({ type: "SET_PLAYING", playing: true });
-  const onPause = () => sendBack({ type: "SET_PLAYING", playing: false });
-  const onDuration = () => {
-    if (el && isFinite(el.duration)) sendBack({ type: "SET_DURATION", duration: el.duration });
-  };
-
-  const detach = () => {
-    if (!el) return;
-    el.removeEventListener("timeupdate", onTime);
-    el.removeEventListener("seeked", onSeeked);
-    el.removeEventListener("play", onPlay);
-    el.removeEventListener("pause", onPause);
-    el.removeEventListener("durationchange", onDuration);
-    el = null;
-  };
-  const attach = (element: HTMLVideoElement) => {
-    detach();
-    el = element;
-    el.addEventListener("timeupdate", onTime);
-    el.addEventListener("seeked", onSeeked);
-    el.addEventListener("play", onPlay);
-    el.addEventListener("pause", onPause);
-    el.addEventListener("durationchange", onDuration);
-    // Initial sync so the machine knows the element state right away
-    if (isFinite(el.duration) && el.duration > 0) {
-      sendBack({ type: "SET_DURATION", duration: el.duration });
-    }
-    sendBack({ type: "SET_TIME", time: el.currentTime });
-    sendBack({ type: "SET_PLAYING", playing: !el.paused });
-  };
+// Clip drag/resize capture: React reports the row element once; this actor
+// streams pointer position as composition time until pointerup.
+type ClipDragSent = { type: "CLIP_DRAG_MOVE"; time: number } | { type: "CLIP_DRAG_END" };
+const clipDragActor = fromCallback<
+  { type: "START"; element: HTMLDivElement; seconds: number },
+  undefined,
+  ClipDragSent
+>(({ sendBack, receive }) => {
+  let cleanup: (() => void) | null = null;
 
   receive((event) => {
-    if (event.type === "ATTACH") attach(event.element);
-    if (event.type === "DETACH") detach();
+    if (event.type !== "START" || !event.element) return;
+    if (cleanup) cleanup();
+    const rect = event.element.getBoundingClientRect();
+    const timeOf = (clientX: number) => {
+      const pct = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+      return pct * event.seconds;
+    };
+    const move = (ev: PointerEvent) => {
+      sendBack({ type: "CLIP_DRAG_MOVE", time: timeOf(ev.clientX) });
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      cleanup = null;
+      sendBack({ type: "CLIP_DRAG_END" });
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    cleanup = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
   });
-  return () => detach();
+
+  return () => {
+    if (cleanup) cleanup();
+  };
 });
 
 // Probes WebCodecs support for each output format once at startup and
@@ -345,9 +507,9 @@ const capsActor = fromCallback<{ type: "SET_CAPABILITIES"; formats: string[] }>(
   }
 );
 
-// Timeline strip playhead dragging. React only reports the pointer-down X;
-// this actor owns the capture, computes the percentage from the strip rect,
-// and streams STRIP_SEEK back on every move. Cleaned up on pointerup.
+// Ruler playhead dragging. React only reports the pointer-down X; this actor
+// owns the capture, computes the percentage from the ruler rect, and streams
+// STRIP_SEEK back on every move. Cleaned up on pointerup.
 type StripDragEvent =
   | { type: "ATTACH"; element: HTMLDivElement }
   | { type: "START"; element: HTMLDivElement; clientX: number };
@@ -398,7 +560,18 @@ export const fluxcutMachine = setup({
     events: {} as FluxcutEvent,
     input: undefined as undefined,
   },
-  actors: { loadVideoMeta, convertActor, dragDropActor, videoSyncActor, keyboardActor, capsActor, stripDragActor, fetchVideo },
+  actors: {
+    loadVideoMeta,
+    probeMedia,
+    convertActor,
+    dragDropActor,
+    clockActor,
+    keyboardActor,
+    capsActor,
+    stripDragActor,
+    clipDragActor,
+    fetchVideo,
+  },
   actions: {
     revokeResult: ({ context }) => {
       if (context.result) URL.revokeObjectURL(context.result.url);
@@ -406,6 +579,7 @@ export const fluxcutMachine = setup({
     revokeFileUrl: ({ context }) => {
       if (context.fileUrl) URL.revokeObjectURL(context.fileUrl);
     },
+    stopClock: sendTo("clock", { type: "CLOCK_STOP" }),
     resetFile: assign({
       file: null,
       fileUrl: null,
@@ -422,6 +596,11 @@ export const fluxcutMachine = setup({
       gridOn: false,
       dragOver: false,
       pendingUrl: null,
+      timeline: EMPTY_TIMELINE,
+      selectedClipId: null,
+      drag: null,
+      pickTarget: null,
+      pickAccept: DEFAULT_VIDEO_ACCEPT,
     }),
   },
 }).createMachine({
@@ -431,10 +610,11 @@ export const fluxcutMachine = setup({
   // Global actors — alive for the machine's entire lifetime
   invoke: [
     { src: "dragDropActor" },
-    { src: "videoSyncActor", id: "videoSync" },
+    { src: "clockActor", id: "clock" },
     { src: "keyboardActor" },
     { src: "capsActor" },
     { src: "stripDragActor", id: "stripDrag" },
+    { src: "clipDragActor", id: "clipDrag" },
   ],
   // Global, state-independent reactions
   on: {
@@ -446,12 +626,6 @@ export const fluxcutMachine = setup({
         return { type: "LOAD_FILE", file: dropFile.file };
       }),
     },
-    SET_TIME: {
-      actions: assign({ time: ({ event }) => event.time }),
-    },
-    SET_PLAYING: {
-      actions: assign({ playing: ({ event }) => event.playing }),
-    },
     TOGGLE_GRID: {
       actions: assign({ gridOn: ({ context }) => !context.gridOn }),
     },
@@ -460,20 +634,55 @@ export const fluxcutMachine = setup({
       guard: ({ context, event }) => context.dragOver !== event.over,
       actions: assign({ dragOver: ({ event }) => event.over }),
     },
-    // ---- video element lifecycle ----
-    ATTACH_VIDEO: {
-      actions: [
-        assign({ videoEl: ({ event }) => event.element }),
-        sendTo("videoSync", ({ event }) => {
-          const attach = event as Extract<FluxcutEvent, { type: "ATTACH_VIDEO" }>;
-          return { type: "ATTACH", element: attach.element };
+    // ---- composition clock: the machine owns time ----
+    PLAY: {
+      guard: ({ context }) => compositionEnd(context.timeline) > 0,
+      actions: [assign({ playing: true }), sendTo("clock", { type: "CLOCK_START" })],
+    },
+    PAUSE: {
+      actions: [assign({ playing: false }), sendTo("clock", { type: "CLOCK_STOP" })],
+    },
+    TOGGLE_PLAY: {
+      actions: raise(({ context }) => ({
+        type: context.playing ? ("PAUSE" as const) : ("PLAY" as const),
+      })),
+    },
+    SEEK: {
+      actions: assign({
+        time: ({ context, event }) =>
+          Math.max(0, Math.min(event.time, Math.max(0, compositionEnd(context.timeline) - 0.05))),
+      }),
+    },
+    SEEK_BY: {
+      actions: assign({
+        time: ({ context, event }) =>
+          Math.max(
+            0,
+            Math.min(context.time + event.delta, Math.max(0, compositionEnd(context.timeline) - 0.05))
+          ),
+      }),
+    },
+    STRIP_SEEK: {
+      actions: raise(({ context, event }) => ({
+        type: "SEEK",
+        time: event.pct * compositionEnd(context.timeline),
+      })),
+    },
+    TIMELINE_TICK: [
+      // All clips gone while playing → stop instead of looping on a 0s clock
+      {
+        guard: ({ context }) => context.playing && compositionEnd(context.timeline) <= 0,
+        actions: raise({ type: "PAUSE" }),
+      },
+      {
+        guard: ({ context }) => context.playing,
+        actions: assign(({ context, event }) => {
+          const end = compositionEnd(context.timeline);
+          return { time: end > 0 ? (context.time + event.dt) % end : 0 };
         }),
-      ],
-    },
-    DETACH_VIDEO: {
-      actions: [sendTo("videoSync", { type: "DETACH" }), assign({ videoEl: null })],
-    },
-    // ---- timeline strip lifecycle + dragging ----
+      },
+    ],
+    // ---- timeline strip lifecycle + ruler dragging ----
     ATTACH_STRIP: {
       actions: [
         assign({ stripEl: ({ event }) => event.element }),
@@ -490,57 +699,82 @@ export const fluxcutMachine = setup({
         clientX: event.clientX,
       })),
     },
-    STRIP_SEEK: {
-      actions: ({ context, event }) => {
-        const v = context.videoEl;
-        const d = v && isFinite(v.duration) ? v.duration : 0;
-        if (!v || !d) return;
-        v.currentTime = Math.max(0, Math.min(event.pct * d, d - 0.05));
-      },
-    },
     ATTACH_INPUT: {
       actions: assign({ fileInput: ({ event }) => event.element }),
     },
-    // ---- playback control: the machine drives the element ----
-    PLAY: {
-      actions: ({ context }) => {
-        void context.videoEl?.play().catch(() => {});
-      },
+    // ---- track + clip edits: helpers return null → keep previous state ----
+    ADD_TRACK: {
+      actions: assign({ timeline: ({ context, event }) => addTrack(context.timeline, event.kind) }),
     },
-    PAUSE: {
-      actions: ({ context }) => {
-        context.videoEl?.pause();
-      },
+    REMOVE_TRACK: {
+      actions: assign(({ context, event }) =>
+        resolveTimeline(context, removeTrack(context.timeline, event.trackId))
+      ),
     },
-    TOGGLE_PLAY: {
-      actions: ({ context }) => {
-        const v = context.videoEl;
-        if (!v) return;
-        if (v.paused) void v.play().catch(() => {});
-        else v.pause();
-      },
+    MOVE_TRACK: {
+      actions: assign(({ context, event }) =>
+        resolveTimeline(context, moveTrack(context.timeline, event.trackId, event.dir))
+      ),
     },
-    SEEK: {
-      actions: ({ context, event }) => {
-        const v = context.videoEl;
-        if (!v || !isFinite(v.duration) || !v.duration) return;
-        v.currentTime = Math.max(0, Math.min(event.time, v.duration - 0.05));
-      },
-    },
-    SEEK_BY: {
-      actions: ({ context, event }) => {
-        const v = context.videoEl;
-        if (!v || !isFinite(v.duration) || !v.duration) return;
-        v.currentTime = Math.max(
-          0,
-          Math.min(v.currentTime + event.delta, v.duration - 0.05)
-        );
-      },
-    },
-    SET_DURATION: {
-      actions: assign({
-        meta: ({ context, event }) => ({ ...context.meta, duration: event.duration }),
+    ADD_TEXT_CLIP: {
+      actions: assign(({ context, event }) => {
+        const placed = addTextClip(context.timeline, event.trackId, context.time);
+        return placed ? { timeline: placed.timeline, selectedClipId: placed.clipId } : {};
       }),
+    },
+    SET_CLIP_TEXT: {
+      actions: assign(({ context, event }) =>
+        resolveTimeline(context, setClipText(context.timeline, event.clipId, event.text))
+      ),
+    },
+    CLIP_DELETE: {
+      actions: assign(({ context, event }) =>
+        resolveTimeline(context, deleteClip(context.timeline, event.clipId))
+      ),
+    },
+    SELECT_CLIP: {
+      guard: ({ context, event }) => event.clipId == null || !!findClip(context.timeline, event.clipId),
+      actions: assign({ selectedClipId: ({ event }) => event.clipId }),
+    },
+    CLIP_DRAG_START: {
+      actions: [
+        assign({
+          drag: ({ event }) => ({
+            clipId: event.clipId,
+            mode: event.mode,
+            anchorTime: event.time,
+          }),
+          selectedClipId: ({ event }) => event.clipId,
+        }),
+        sendTo("clipDrag", ({ event }) => ({
+          type: "START",
+          element: event.element,
+          seconds: event.seconds,
+        })),
+      ],
+    },
+    CLIP_DRAG_MOVE: {
+      actions: assign(({ context, event }) => {
+        if (!context.drag) return {};
+        const next = planClipDrag(context.timeline, context.drag, event.time);
+        // Anchor advances only on accepted moves, so rejects never accumulate
+        return next ? { timeline: next, drag: { ...context.drag, anchorTime: event.time } } : {};
+      }),
+    },
+    CLIP_DRAG_END: {
+      actions: assign({ drag: null }),
+    },
+    // ---- media ingest for tracks ----
+    REQUEST_PICK_TRACK_MEDIA: {
+      actions: [
+        ({ context }) => {
+          context.fileInput?.click();
+        },
+        assign(({ context, event }) => ({
+          pickTarget: event.trackId,
+          pickAccept: trackAccept(findTrack(context.timeline, event.trackId)?.kind),
+        })),
+      ],
     },
     // ---- chrome ----
     SET_PROJECT_NAME: {
@@ -576,7 +810,7 @@ export const fluxcutMachine = setup({
           context.fileInput?.click();
         },
         // Opening the picker implies wanting to see the convert panel again
-        assign({ panelOpen: true }),
+        assign({ panelOpen: true, pickTarget: null, pickAccept: DEFAULT_VIDEO_ACCEPT }),
       ],
     },
   },
@@ -608,6 +842,18 @@ export const fluxcutMachine = setup({
             trim: ({ event }) => ({ start: 0, end: event.output.meta.duration }),
             time: 0,
             playing: false,
+            timeline: ({ context, event }) =>
+              bootstrapMainVideo(EMPTY_TIMELINE, {
+                url: event.output.fileUrl,
+                duration: event.output.meta.duration,
+                w: event.output.meta.w,
+                h: event.output.meta.h,
+                poster: event.output.meta.poster,
+                frames: event.output.frames,
+                name: context.file?.name ?? "Main video",
+              }),
+            selectedClipId: null,
+            drag: null,
           }),
         },
         onError: {
@@ -631,7 +877,7 @@ export const fluxcutMachine = setup({
           actions: assign({ pendingUrl: ({ event }) => event.url, error: "" }),
         },
         CLEAR: { target: "empty", actions: ["resetFile"] },
-  },
+      },
     },
 
     downloading: {
@@ -652,9 +898,7 @@ export const fluxcutMachine = setup({
             "resetFile",
             assign({
               error: ({ event }) =>
-                event.error instanceof Error
-                  ? event.error.message
-                  : "Couldn't download that URL.",
+                event.error instanceof Error ? event.error.message : "Couldn't download that URL.",
             }),
           ],
         },
@@ -679,30 +923,45 @@ export const fluxcutMachine = setup({
             trim: ({ context }) => ({ start: 0, end: context.meta.duration || 0 }),
           }),
         },
+        // In/Out project the playhead into SOURCE seconds of the main clip;
+        // off the main clip the previous trim stays (buttons disabled in UI).
         SET_IN_POINT: {
-          actions: assign({
-            trim: ({ context }) => ({
-              start: Math.min(context.time, context.trim.end - 0.2),
-              end: context.trim.end,
-            }),
+          actions: assign(({ context }) => {
+            const src = compToSource(context.timeline, context.time);
+            if (src == null) return {};
+            return {
+              trim: {
+                start: Math.min(src, context.trim.end - MIN_CLIP_SEC),
+                end: context.trim.end,
+              },
+            };
           }),
         },
         SET_OUT_POINT: {
-          actions: assign({
-            trim: ({ context }) => ({
-              start: context.trim.start,
-              end: Math.max(context.time, context.trim.start + 0.2),
-            }),
+          actions: assign(({ context }) => {
+            const src = compToSource(context.timeline, context.time);
+            if (src == null) return {};
+            return {
+              trim: {
+                start: context.trim.start,
+                end: Math.max(src, context.trim.start + MIN_CLIP_SEC),
+              },
+            };
           }),
         },
         CONVERT: {
           target: "converting",
           actions: assign({ panelOpen: true }),
         },
+        ADD_MEDIA_CLIP: {
+          target: "#fluxcut.addingClip",
+          guard: ({ context }) => context.pickTarget != null,
+        },
         LOAD_FILE: {
           target: "loading",
           actions: [
             "revokeFileUrl",
+            "stopClock",
             assign({
               file: ({ event }) => event.file,
               error: "",
@@ -710,6 +969,9 @@ export const fluxcutMachine = setup({
               progress: 0,
               time: 0,
               playing: false,
+              timeline: EMPTY_TIMELINE,
+              selectedClipId: null,
+              drag: null,
             }),
           ],
         },
@@ -721,7 +983,7 @@ export const fluxcutMachine = setup({
             assign({ pendingUrl: ({ event }) => event.url, error: "", progress: 0 }),
           ],
         },
-        CLEAR: { target: "empty", actions: ["revokeFileUrl", "resetFile"] },
+        CLEAR: { target: "empty", actions: ["revokeFileUrl", "resetFile", "stopClock"] },
       },
     },
 
@@ -813,28 +1075,21 @@ export const fluxcutMachine = setup({
             assign({ trim: ({ event }) => event.trim, result: null, progress: 0 }),
           ],
         },
-        RESET_TRIM: {
-          target: "ready",
-          actions: [
-            "revokeResult",
-            assign({
-              trim: ({ context }) => ({ start: 0, end: context.meta.duration || 0 }),
-              result: null,
-              progress: 0,
-            }),
-          ],
-        },
         SET_IN_POINT: {
           target: "ready",
           actions: [
             "revokeResult",
-            assign({
-              trim: ({ context }) => ({
-                start: Math.min(context.time, context.trim.end - 0.2),
-                end: context.trim.end,
-              }),
-              result: null,
-              progress: 0,
+            assign(({ context }) => {
+              const src = compToSource(context.timeline, context.time);
+              if (src == null) return {};
+              return {
+                trim: {
+                  start: Math.min(src, context.trim.end - MIN_CLIP_SEC),
+                  end: context.trim.end,
+                },
+                result: null,
+                progress: 0,
+              };
             }),
           ],
         },
@@ -842,26 +1097,38 @@ export const fluxcutMachine = setup({
           target: "ready",
           actions: [
             "revokeResult",
-            assign({
-              trim: ({ context }) => ({
-                start: context.trim.start,
-                end: Math.max(context.time, context.trim.start + 0.2),
-              }),
-              result: null,
-              progress: 0,
+            assign(({ context }) => {
+              const src = compToSource(context.timeline, context.time);
+              if (src == null) return {};
+              return {
+                trim: {
+                  start: context.trim.start,
+                  end: Math.max(src, context.trim.start + MIN_CLIP_SEC),
+                },
+                result: null,
+                progress: 0,
+              };
             }),
           ],
+        },
+        ADD_MEDIA_CLIP: {
+          target: "#fluxcut.addingClip",
+          guard: ({ context }) => context.pickTarget != null,
         },
         LOAD_FILE: {
           target: "loading",
           actions: [
             "revokeFileUrl",
             "revokeResult",
+            "stopClock",
             assign({
               file: ({ event }) => event.file,
               error: "",
               time: 0,
               playing: false,
+              timeline: EMPTY_TIMELINE,
+              selectedClipId: null,
+              drag: null,
             }),
           ],
         },
@@ -875,7 +1142,41 @@ export const fluxcutMachine = setup({
         },
         CLEAR: {
           target: "empty",
-          actions: ["revokeFileUrl", "revokeResult", "resetFile"],
+          actions: ["revokeFileUrl", "revokeResult", "resetFile", "stopClock"],
+        },
+      },
+    },
+
+    // Transient: probing one track-media file before placing its clip
+    addingClip: {
+      invoke: {
+        src: "probeMedia",
+        input: ({ context, event }) => {
+          const add = event as Extract<FluxcutEvent, { type: "ADD_MEDIA_CLIP" }>;
+          return { file: add.file, trackId: context.pickTarget! };
+        },
+        onDone: {
+          target: "#fluxcut.ready",
+          actions: assign(({ context, event }) => {
+            const next = addMediaClip(
+              context.timeline,
+              event.output.trackId,
+              event.output.asset,
+              context.time
+            );
+            return next
+              ? resolveTimeline(context, next)
+              : { error: "That file doesn't fit this track." };
+          }),
+        },
+        onError: {
+          target: "#fluxcut.ready",
+          actions: assign({
+            error: ({ event }) =>
+              event.error instanceof Error
+                ? event.error.message
+                : "Couldn't read that media file.",
+          }),
         },
       },
     },

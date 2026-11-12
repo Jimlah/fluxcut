@@ -21,44 +21,47 @@ export default function BottomBar() {
   const hasFile = useFluxcutSelector((s) => !!s.context.fileUrl);
   const panelOpen = useFluxcutSelector((s) => s.context.panelOpen);
   const gridOn = useFluxcutSelector((s) => s.context.gridOn);
-  const trimStart = useFluxcutSelector((s) => s.context.trim.start);
-  const trimEnd = useFluxcutSelector((s) => s.context.trim.end);
 
   // State pills — pre-formatted by the machine layer's view model
-  const { aspect, resLabel, durationText, qualityTag, sizeHint } = useFluxcutView();
+  const { aspect, resLabel, durationText, qualityTag, sizeHint, trimInComp, trimOutComp, trimSettable, trimHint } =
+    useFluxcutView();
 
   return (
     <div className="bottombar">
       <div className="transport">
         <button
           className="circle-btn"
-          title="To trim start"
-          onClick={() => actions.seek(trimStart || 0)}
-          disabled={!hasFile}
+          title="To In point"
+          onClick={() => {
+            if (trimInComp != null) actions.seek(trimInComp);
+          }}
+          disabled={!hasFile || trimInComp == null}
         >
           <SkipBack />
         </button>
         <button
           className="circle-btn"
-          title="Set In point"
+          title={trimSettable ? "Set In point" : trimHint}
           onClick={() => actions.setIn()}
-          disabled={!hasFile}
+          disabled={!hasFile || !trimSettable}
         >
           <Flag />
         </button>
         <button
           className="circle-btn"
-          title="Set Out point"
+          title={trimSettable ? "Set Out point" : trimHint}
           onClick={() => actions.setOut()}
-          disabled={!hasFile}
+          disabled={!hasFile || !trimSettable}
         >
           <Flag style={{ transform: "scaleX(-1)" }} />
         </button>
         <button
           className="circle-btn"
-          title="To trim end"
-          onClick={() => actions.seek(trimEnd || 0)}
-          disabled={!hasFile}
+          title="To Out point"
+          onClick={() => {
+            if (trimOutComp != null) actions.seek(trimOutComp);
+          }}
+          disabled={!hasFile || trimOutComp == null}
         >
           <SkipForward />
         </button>

@@ -5,6 +5,19 @@ import { fluxcutMachine, statusOf } from "./machine";
 import type { FluxcutContext as FluxcutMachineContext, FluxcutStatus } from "./machine";
 import { RESOLUTIONS } from "./convert";
 import { aspectLabel, fmtBytes, fmtTime } from "./video";
+import {
+  compToSource,
+  compositionEnd,
+  primaryVideoClip,
+  sourceToComp,
+  type Clip,
+  type ClipDragMode,
+  type ClipId,
+  type TrackId,
+  type TrackKind,
+  type VideoAsset,
+  type VisualClipKind,
+} from "./timeline";
 
 export type FluxcutActorRef = ActorRefFrom<typeof fluxcutMachine>;
 export type FluxcutSnapshot = SnapshotFrom<FluxcutActorRef>;
@@ -66,21 +79,37 @@ export function useFluxcutActions() {
       setIn: () => send({ type: "SET_IN_POINT" }),
       setOut: () => send({ type: "SET_OUT_POINT" }),
 
-      // ---- playback (acts on the machine-owned video element) ----
+      // ---- composition playback (the machine owns time) ----
       play: () => send({ type: "PLAY" }),
       pause: () => send({ type: "PAUSE" }),
       togglePlay: () => send({ type: "TOGGLE_PLAY" }),
       seek: (time: number) => send({ type: "SEEK", time }),
       seekBy: (delta: number) => send({ type: "SEEK_BY", delta }),
 
-      // ---- element lifecycle ----
-      attachVideo: (element: HTMLVideoElement) => send({ type: "ATTACH_VIDEO", element }),
-      detachVideo: () => send({ type: "DETACH_VIDEO" }),
+      // ---- tracks & clips ----
+      addTrack: (kind: TrackKind) => send({ type: "ADD_TRACK", kind }),
+      removeTrack: (trackId: TrackId) => send({ type: "REMOVE_TRACK", trackId }),
+      moveTrack: (trackId: TrackId, dir: -1 | 1) => send({ type: "MOVE_TRACK", trackId, dir }),
+      addTextClip: (trackId: TrackId) => send({ type: "ADD_TEXT_CLIP", trackId }),
+      setClipText: (clipId: ClipId, text: string) => send({ type: "SET_CLIP_TEXT", clipId, text }),
+      selectClip: (clipId: ClipId | null) => send({ type: "SELECT_CLIP", clipId }),
+      deleteClip: (clipId: ClipId) => send({ type: "CLIP_DELETE", clipId }),
+      clipDragStart: (p: {
+        clipId: ClipId;
+        mode: ClipDragMode;
+        time: number;
+        element: HTMLDivElement;
+        seconds: number;
+      }) => send({ type: "CLIP_DRAG_START", ...p }),
+      addMediaClip: (trackId: TrackId, file: File) => send({ type: "ADD_MEDIA_CLIP", trackId, file }),
+      pickTrackMedia: (trackId: TrackId) => send({ type: "REQUEST_PICK_TRACK_MEDIA", trackId }),
+
+      // ---- element lifecycle (ruler + file input) ----
       attachInput: (element: HTMLInputElement) => send({ type: "ATTACH_INPUT", element }),
       attachStrip: (element: HTMLDivElement) => send({ type: "ATTACH_STRIP", element }),
       detachStrip: () => send({ type: "DETACH_STRIP" }),
 
-      // ---- timeline ----
+      // ---- ruler scrubbing ----
       dragStrip: (clientX: number) => send({ type: "DRAG_STRIP", clientX }),
       stripSeek: (pct: number) => send({ type: "STRIP_SEEK", pct }),
 
@@ -163,10 +192,17 @@ export interface FluxcutView {
   trimOutText: string;
   resultSizeText: string;
   timeText: string;
-  ticks: string[];
+  /** Composition-time landing spots for the skip-to-In/Out buttons (null → disabled). */
+  trimInComp: number | null;
+  trimOutComp: number | null;
+  /** The playhead sits on the main clip → In/Out are usable. */
+  trimSettable: boolean;
+  trimHint: string;
 }
 
 const VIEW_MBPS: Record<string, number> = { "1080": 8, "720": 5, "480": 2.5, "360": 1.2 };
+
+const TRIM_OFF_MAIN_HINT = "Move the playhead over the main video clip to trim.";
 
 /** One selector that formats everything the UI renders as text. */
 export function selectView(s: FluxcutSnapshot): FluxcutView {
@@ -175,14 +211,6 @@ export function selectView(s: FluxcutSnapshot): FluxcutView {
   const trimLen = Math.max(0, c.trim.end - c.trim.start);
   const eff = trimLen || dur;
   const q = c.qualityId === "high" ? 1 : c.qualityId === "medium" ? 0.6 : 0.35;
-
-  const ticks: string[] = [];
-  if (dur > 0) {
-    const raw = dur / 12;
-    const steps = [1, 2, 5, 10, 15, 30, 60, 120, 300];
-    const step = steps.find((x) => x >= raw) ?? 600;
-    for (let t = 0; t <= dur + 0.01; t += step) ticks.push(fmtTime(t));
-  }
 
   return {
     aspect: aspectLabel(c.meta.w, c.meta.h) || "—",
@@ -201,7 +229,10 @@ export function selectView(s: FluxcutSnapshot): FluxcutView {
     trimOutText: fmtTime(c.trim.end),
     resultSizeText: c.result ? fmtBytes(c.result.size) : "",
     timeText: fmtTime(c.time),
-    ticks,
+    trimInComp: sourceToComp(c.timeline, c.trim.start),
+    trimOutComp: sourceToComp(c.timeline, c.trim.end),
+    trimSettable: compToSource(c.timeline, c.time) != null,
+    trimHint: TRIM_OFF_MAIN_HINT,
   };
 }
 
@@ -214,7 +245,7 @@ export function useFluxcutView(): FluxcutView {
   return useFluxcutSelector(selectView, shallowEqual);
 }
 
-/* ---------- timeline view: geometry + mode, pre-computed ---------- */
+/* ---------- timeline view: lanes, ruler geometry, mode ---------- */
 
 // Demo stills fetched from Mixkit (see README credits)
 export const DEMO_THUMBS = [
@@ -226,51 +257,238 @@ export const DEMO_THUMBS = [
   "https://assets.mixkit.co/videos/45597/45597-thumb-360-3.jpg", // red smoke on black
 ];
 
+export interface ClipView {
+  id: ClipId;
+  kind: Clip["kind"];
+  label: string;
+  leftPct: number;
+  widthPct: number;
+  selected: boolean;
+  /** Poster (video) or the image itself (image clips); null for audio/text. */
+  tile: string | null;
+  /** Filmstrip tiles on the primary video clip only. */
+  filmstrip: string[] | null;
+  text: string | null;
+}
+
+export interface LaneView {
+  id: TrackId;
+  kind: TrackKind;
+  name: string;
+  clips: ClipView[];
+  canUp: boolean;
+  canDown: boolean;
+}
+
 export interface TimelineView {
-  mode: "demo" | "live" | "empty";
-  frames: string[];
+  mode: "demo" | "live";
+  /** Ruler window: compositionEnd floored at 10s so short projects breathe. */
+  secondsVisible: number;
   ticks: string[];
   timeText: string;
   playheadPct: number;
+  lanes: LaneView[];
+  /** In/Out band projected onto the ruler through the main clip. */
   trimActive: boolean;
   trimLeftPct: number;
   trimWidthPct: number;
-  trimInPct: number;
-  trimOutPct: number;
 }
 
-/** A dedicated selector so Timeline re-renders without touching global view. */
+const TICK_STEPS = [0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300];
+
+/** The multi-lane timeline in one subscription. */
 export function selectTimelineView(s: FluxcutSnapshot): TimelineView {
   const c = s.context;
-  const dur = c.meta.duration || 0;
-  const demo = !c.fileUrl;
-  const live = !demo && dur > 0;
-  const mode: TimelineView["mode"] = live ? "live" : demo ? "demo" : "empty";
-  const pct = dur ? (t: number) => (Math.min(1, Math.max(0, t / dur)) * 100) : () => 0;
+  const tl = c.timeline;
+  const live = tl.tracks.length > 0;
+  const secondsVisible = live ? Math.max(compositionEnd(tl), 10) : 0;
+  const pct = (t: number) =>
+    secondsVisible > 0 ? (Math.min(t, secondsVisible) / secondsVisible) * 100 : 0;
 
-  const frames = live
-    ? c.frames.length
-      ? c.frames
-      : c.meta.poster
-        ? [c.meta.poster]
-        : []
-    : DEMO_THUMBS;
+  const ticks: string[] = [];
+  if (live) {
+    const step = TICK_STEPS.find((x) => x >= secondsVisible / 12) ?? 600;
+    for (let t = 0; t <= secondsVisible + 1e-6; t += step) ticks.push(fmtTime(t));
+  }
+
+  // Visual lanes are a prefix; audio lanes follow. Reorder buttons may not
+  // cross the boundary between the two sections.
+  const firstAudio = tl.tracks.findIndex((t) => t.kind === "audio");
+  const visualEnd = firstAudio === -1 ? tl.tracks.length : firstAudio;
+
+  const lanes: LaneView[] = live
+    ? tl.tracks.map((track, i) => ({
+        id: track.id,
+        kind: track.kind,
+        name: track.name,
+        canUp: track.kind === "audio" ? i > visualEnd : i > 0,
+        canDown: track.kind === "audio" ? i < tl.tracks.length - 1 : i < visualEnd - 1,
+        clips: track.clips.map((clip) => {
+          const asset = "assetId" in clip ? tl.assets[clip.assetId] : undefined;
+          return {
+            id: clip.id,
+            kind: clip.kind,
+            label:
+              clip.kind === "text" ? clip.text.trim() || "Text" : (asset?.name ?? "Clip"),
+            leftPct: pct(clip.start),
+            widthPct: pct(clip.start + clip.duration) - pct(clip.start),
+            selected: clip.id === c.selectedClipId,
+            tile:
+              asset && asset.kind === "video"
+                ? asset.poster || null
+                : asset && asset.kind === "image"
+                  ? asset.url
+                  : null,
+            filmstrip:
+              clip.kind === "video" && tl.primaryVideoClipId === clip.id && c.frames.length
+                ? c.frames
+                : null,
+            text: clip.kind === "text" ? clip.text : null,
+          };
+        }),
+      }))
+    : [];
+
+  let trimActive = false;
+  let trimLeftPct = 0;
+  let trimWidthPct = 0;
+  if (live) {
+    const inComp = sourceToComp(tl, c.trim.start);
+    const outComp = sourceToComp(tl, c.trim.end);
+    const primary = primaryVideoClip(tl);
+    const asset = primary ? tl.assets[primary.assetId] : undefined;
+    const sourceDur = asset && asset.kind === "video" ? asset.duration : 0;
+    if (
+      inComp != null &&
+      outComp != null &&
+      sourceDur > 0 &&
+      (c.trim.start > 0.05 || c.trim.end < sourceDur - 0.05)
+    ) {
+      trimActive = true;
+      trimLeftPct = pct(inComp);
+      trimWidthPct = pct(outComp) - pct(inComp);
+    }
+  }
 
   return {
-    mode,
-    frames,
-    ticks: live ? selectView(s).ticks : [],
+    mode: live ? "live" : "demo",
+    secondsVisible,
+    ticks,
     timeText: fmtTime(c.time),
-    playheadPct: live ? pct(c.time) : 0,
-    trimActive: live && (c.trim.start > 0.05 || c.trim.end < dur - 0.05),
-    trimLeftPct: pct(c.trim.start),
-    trimWidthPct: dur ? pct(c.trim.end - c.trim.start) - pct(c.trim.start) : 0,
-    trimInPct: pct(c.trim.start),
-    trimOutPct: pct(c.trim.end),
+    playheadPct: pct(c.time),
+    lanes,
+    trimActive,
+    trimLeftPct,
+    trimWidthPct,
   };
 }
 
 /** Timeline-specific subscription — isolates its high-frequency updates. */
 export function useTimelineView(): TimelineView {
   return useFluxcutSelector(selectTimelineView, shallowEqual);
+}
+
+/* ---------- preview view model: one layer per clip, stacked by lane ---------- */
+
+export interface PreviewMedia {
+  src: string;
+  /** Source seconds the media element should sit at for this comp time. */
+  sourceTime: number;
+  active: boolean;
+  elKind: "video" | "audio" | "image";
+}
+
+export interface PreviewLayer {
+  clipId: ClipId;
+  kind: VisualClipKind | "audio";
+  /** z-order within the stage; visual lanes only (audio has none). */
+  z: number;
+  leftPct: number;
+  widthPct: number;
+  active: boolean;
+  media: PreviewMedia | null;
+  text: string | null;
+}
+
+export interface PreviewVM {
+  layers: PreviewLayer[];
+  time: number;
+  playing: boolean;
+  duration: number;
+  /** Aspect of the primary (or first) video asset — derived, never stored. */
+  dims: { w: number; h: number } | null;
+}
+
+/** The stacked stage preview: layers in lane order with sync targets. */
+export function selectPreview(s: FluxcutSnapshot): PreviewVM {
+  const c = s.context;
+  const tl = c.timeline;
+  const time = c.time;
+  const isActive = (clip: Clip) => time >= clip.start && time < clip.start + clip.duration;
+  const layers: PreviewLayer[] = [];
+
+  const visualTotal = tl.tracks.filter((t) => t.kind !== "audio").length;
+  tl.tracks.forEach((track, i) => {
+    const visualBefore = tl.tracks.slice(0, i).filter((t) => t.kind !== "audio").length;
+    const z = track.kind === "audio" ? 0 : visualTotal - visualBefore; // top lane highest
+    for (const clip of track.clips) {
+      const active = isActive(clip);
+      if (clip.kind === "text") {
+        layers.push({
+          clipId: clip.id,
+          kind: "text",
+          z,
+          leftPct: 0,
+          widthPct: 100,
+          active,
+          media: null,
+          text: clip.text,
+        });
+        continue;
+      }
+      const asset = tl.assets[clip.assetId];
+      if (!asset) continue;
+      layers.push({
+        clipId: clip.id,
+        kind: clip.kind,
+        z,
+        leftPct: 0,
+        widthPct: 100,
+        active,
+        media: {
+          src: asset.url,
+          sourceTime:
+            clip.kind === "video" || clip.kind === "audio"
+              ? clip.sourceStart + Math.max(0, time - clip.start)
+              : 0,
+          active,
+          elKind: clip.kind,
+        },
+        text: null,
+      });
+    }
+  });
+
+  const primary = primaryVideoClip(tl);
+  const primaryAsset = primary ? tl.assets[primary.assetId] : undefined;
+  const videoAsset =
+    primaryAsset && primaryAsset.kind === "video"
+      ? primaryAsset
+      : Object.values(tl.assets).find((a): a is VideoAsset => a.kind === "video");
+
+  return {
+    layers,
+    time,
+    playing: c.playing,
+    duration: compositionEnd(tl),
+    dims:
+      videoAsset && videoAsset.w > 0 && videoAsset.h > 0
+        ? { w: videoAsset.w, h: videoAsset.h }
+        : null,
+  };
+}
+
+/** Compositor-specific subscription — updates on every clock tick. */
+export function usePreview(): PreviewVM {
+  return useFluxcutSelector(selectPreview, shallowEqual);
 }
