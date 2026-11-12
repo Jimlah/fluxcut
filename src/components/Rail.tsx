@@ -1,6 +1,7 @@
 import {
   ArrowLeft,
   Clapperboard,
+  Scissors,
   AudioLines,
   Music2,
   Languages,
@@ -11,6 +12,7 @@ import { useFluxcutActions, useFluxcutSelector } from "../lib/useFluxcut";
 
 const TOOLS = [
   { icon: Clapperboard, key: "clip", hint: "Clip" },
+  { icon: Scissors, key: "razor", hint: "Razor" },
   { icon: AudioLines, key: "wave", hint: "Waveform" },
   { icon: Music2, key: "music", hint: "Music" },
   { icon: Languages, key: "translate", hint: "Translate" },

@@ -37,6 +37,8 @@ export type VideoClip = {
   duration: Sec;
   assetId: AssetId;
   sourceStart: Sec;
+  /** Composition seconds per source second (0.25 = slow motion, 8 = timelapse). */
+  speed: number;
 };
 export type AudioClip = {
   id: ClipId;
@@ -45,6 +47,8 @@ export type AudioClip = {
   duration: Sec;
   assetId: AssetId;
   sourceStart: Sec;
+  /** Composition seconds per source second (0.25 = slow motion, 8 = timelapse). */
+  speed: number;
 };
 export type ImageClip = { id: ClipId; kind: "image"; start: Sec; duration: Sec; assetId: AssetId };
 export type TextClip = { id: ClipId; kind: "text"; start: Sec; duration: Sec; text: string };
@@ -68,6 +72,10 @@ export type Timeline = {
 export const MIN_CLIP_SEC = 0.2;
 /** Placeholder length for freshly inserted text/image segments. */
 export const GROWTH_PLACEHOLDER_SEC = 3;
+/** Clip speed bounds (composition sec / source sec) and the UI presets in between. */
+export const SPEED_MIN = 0.25;
+export const SPEED_MAX = 8;
+export const SPEED_PRESETS: number[] = [0.25, 0.5, 1, 1.5, 2, 4, 8];
 
 export const EMPTY_TIMELINE: Timeline = { tracks: [], assets: {}, primaryVideoClipId: null };
 
@@ -128,7 +136,7 @@ export function compositionEnd(tl: Timeline): Sec {
 export function compToSource(tl: Timeline, time: Sec): Sec | null {
   const clip = primaryVideoClip(tl);
   if (!clip || time < clip.start || time >= clip.start + clip.duration) return null;
-  return clip.sourceStart + (time - clip.start);
+  return clip.sourceStart + (time - clip.start) * clip.speed;
 }
 
 /** Source seconds on the main video clip → composition time; null outside it. */
@@ -136,8 +144,8 @@ export function sourceToComp(tl: Timeline, sourceTime: Sec): Sec | null {
   const clip = primaryVideoClip(tl);
   if (!clip) return null;
   const offset = sourceTime - clip.sourceStart;
-  if (offset < 0 || offset > clip.duration) return null;
-  return clip.start + offset;
+  if (offset < 0 || offset > clip.duration * clip.speed) return null;
+  return clip.start + offset / clip.speed;
 }
 
 /** Same-track overlap test over every clip except the one being placed. */
@@ -230,6 +238,22 @@ export function deleteClip(tl: Timeline, clipId: ClipId): Timeline {
   };
 }
 
+/** Deletes the clip and closes the gap: same-track clips starting at or after it slide left. */
+export function rippleDeleteClip(tl: Timeline, clipId: ClipId): Timeline | null {
+  const entry = findClipEntry(tl, clipId);
+  if (!entry) return null;
+  const gone = entry.clip;
+  return {
+    ...withTrack(tl, entry.track.id, (t) => ({
+      ...t,
+      clips: t.clips
+        .filter((c) => c.id !== clipId)
+        .map((c) => (c.start >= gone.start ? { ...c, start: c.start - gone.duration } : c)),
+    }) as Track),
+    primaryVideoClipId: tl.primaryVideoClipId === clipId ? null : tl.primaryVideoClipId,
+  };
+}
+
 export function setClipText(tl: Timeline, clipId: ClipId, text: string): Timeline | null {
   const entry = findClipEntry(tl, clipId);
   if (!entry || entry.clip.kind !== "text") return null;
@@ -237,6 +261,57 @@ export function setClipText(tl: Timeline, clipId: ClipId, text: string): Timelin
     ...t,
     clips: t.clips.map((c) => (c.id === clipId ? { ...c, text } : c)),
   }) as Track);
+}
+
+// Razor cut: the piece left of compTime keeps the clip id (references stay valid),
+// the fresh right piece carries the source window from the cut on.
+export function splitClip(
+  tl: Timeline,
+  clipId: ClipId,
+  compTime: Sec
+): { timeline: Timeline; rightClipId: ClipId } | null {
+  const entry = findClipEntry(tl, clipId);
+  if (!entry) return null;
+  const { track, clip } = entry;
+  const leftDur = compTime - clip.start;
+  const rightDur = clip.duration - leftDur;
+  if (leftDur < MIN_CLIP_SEC || rightDur < MIN_CLIP_SEC) return null;
+  const idx = track.clips.findIndex((c) => c.id === clipId);
+  const leftClip: Clip = { ...clip, duration: leftDur };
+  const rightClip: Clip =
+    clip.kind === "video" || clip.kind === "audio"
+      ? {
+          ...clip,
+          id: newClipId(),
+          start: compTime,
+          duration: rightDur,
+          sourceStart: clip.sourceStart + leftDur * clip.speed,
+        }
+      : { ...clip, id: newClipId(), start: compTime, duration: rightDur };
+  // Replace the left piece at its index with left + right in one splice.
+  const clips = [...track.clips];
+  clips.splice(idx, 1, leftClip, rightClip);
+  return {
+    timeline: withTrack(tl, track.id, () => ({ ...track, clips }) as Track),
+    rightClipId: rightClip.id,
+  };
+}
+
+// Retimes a media clip in place: the source window keeps its length, so the
+// composition duration rescales by old/new and must still fit the track and
+// the asset. Null for non-media clips and any broken bound.
+export function setClipSpeed(tl: Timeline, clipId: ClipId, speed: number): Timeline | null {
+  const entry = findClipEntry(tl, clipId);
+  if (!entry || (entry.clip.kind !== "video" && entry.clip.kind !== "audio")) return null;
+  const src = entry.clip;
+  if (!(speed >= SPEED_MIN && speed <= SPEED_MAX)) return null;
+  const duration = src.duration * src.speed / speed;
+  if (duration < MIN_CLIP_SEC) return null;
+  if (overlaps(entry.track, src.start, src.start + duration, src.id)) return null;
+  const asset = getAsset(tl, src.assetId);
+  if (!asset || asset.kind !== src.kind || src.sourceStart + duration * speed > asset.duration + EPS) return null;
+  const updated: Clip = { ...src, duration, speed };
+  return withTrack(tl, entry.track.id, () => withClip(entry.track, src.id, updated));
 }
 
 /** Inserts an asset-backed clip at `start` (pushed right past any blocker). */
@@ -253,9 +328,9 @@ export function addMediaClip(
   const at = firstFreeStart(track, start, duration);
   const clip: Clip =
     asset.kind === "video"
-      ? { id: newClipId(), kind: "video", start: at, duration, assetId: asset.id, sourceStart: 0 }
+      ? { id: newClipId(), kind: "video", start: at, duration, assetId: asset.id, sourceStart: 0, speed: 1 }
       : asset.kind === "audio"
-        ? { id: newClipId(), kind: "audio", start: at, duration, assetId: asset.id, sourceStart: 0 }
+        ? { id: newClipId(), kind: "audio", start: at, duration, assetId: asset.id, sourceStart: 0, speed: 1 }
         : { id: newClipId(), kind: "image", start: at, duration, assetId: asset.id };
   return {
     timeline: withTrack(registerAsset(tl, asset), trackId, (t) => ({ ...t, clips: [...t.clips, clip] }) as Track),
@@ -280,7 +355,7 @@ export function addTextClip(
   };
 }
 
-export type ClipDragMode = "move" | "left" | "right";
+export type ClipDragMode = "move" | "left" | "right" | "slip" | "slide";
 export interface ClipDragState {
   clipId: ClipId;
   mode: ClipDragMode;
@@ -288,9 +363,52 @@ export interface ClipDragState {
   anchorTime: Sec;
 }
 
+// The two immediate sorted neighbors of the clip, tight to it within EPS.
+function slideRun(track: Track, clip: Clip): { left: Clip; right: Clip } | null {
+  const sorted = [...track.clips].sort((a, b) => a.start - b.start);
+  const i = sorted.findIndex((c) => c.id === clip.id);
+  if (i < 1 || i >= sorted.length - 1) return null;
+  const left = sorted[i - 1];
+  const right = sorted[i + 1];
+  if (Math.abs(clipEnd(left) - clip.start) > EPS) return null;
+  if (Math.abs(right.start - clipEnd(clip)) > EPS) return null;
+  return { left, right };
+}
+
+// Slides a contiguous three-clip run as one seam: the target frame moves by d,
+// the left neighbor stretches to it and the right one shrinks to follow, with
+// each media window re-derived from its own speed. Null on any bounds hit.
+function planSlide(tl: Timeline, track: Track, run: { left: Clip; right: Clip }, clip: Clip, delta: Sec): Track | null {
+  const { left, right } = run;
+  const newStart = Math.max(0, clip.start + delta);
+  const d = newStart - clip.start;
+  if (d === 0) return null;
+  const leftDur = newStart - left.start;
+  if (leftDur < MIN_CLIP_SEC) return null;
+  if (left.kind === "video" || left.kind === "audio") {
+    const la = tl.assets[left.assetId];
+    if (!la || la.kind !== left.kind || left.sourceStart + leftDur * left.speed > la.duration + EPS) return null;
+  }
+  const rightDur = right.duration - d;
+  if (rightDur < MIN_CLIP_SEC) return null;
+  const rightStart = newStart + clip.duration;
+  if (right.kind === "video" || right.kind === "audio") {
+    if (right.sourceStart + d * right.speed < 0) return null;
+  }
+  const rightUpdated: Clip =
+    right.kind === "video" || right.kind === "audio"
+      ? { ...right, start: rightStart, duration: rightDur, sourceStart: right.sourceStart + d * right.speed }
+      : { ...right, start: rightStart, duration: rightDur };
+  const targetUpdated: Clip = { ...clip, start: newStart };
+  const leftUpdated: Clip = { ...left, duration: leftDur };
+  return withClip(withClip(withClip(track, clip.id, targetUpdated), left.id, leftUpdated), right.id, rightUpdated);
+}
+
 /**
  * Candidate layout for one drag step, recomputed from the last anchor so a
  * rejected candidate never accumulates. Null means: keep the previous state.
+ * Alt (slip) moves the source window behind a fixed frame; Ctrl/Meta (slide)
+ * keeps a contiguous run glued at the limits instead of corrupting the layout.
  */
 export function planClipDrag(tl: Timeline, drag: ClipDragState, time: Sec): Timeline | null {
   const entry = findClipEntry(tl, drag.clipId);
@@ -299,18 +417,38 @@ export function planClipDrag(tl: Timeline, drag: ClipDragState, time: Sec): Time
   const delta = time - drag.anchorTime;
   if (delta === 0) return null;
 
+  // A slide without a contiguous three-clip run behaves exactly like a move.
+  if (drag.mode === "slide") {
+    const run = slideRun(track, clip);
+    if (run) {
+      const slid = planSlide(tl, track, run, clip, delta);
+      return slid ? withTrack(tl, track.id, () => slid) : null;
+    }
+  }
+
   const src = clip.kind === "video" || clip.kind === "audio" ? clip : null;
+
+  // Slip: the frame stays fixed; the source window slides behind it.
+  if (drag.mode === "slip") {
+    if (!src) return null;
+    const asset = getAsset(tl, src.assetId);
+    if (!asset || asset.kind !== src.kind) return null;
+    const sourceStart = src.sourceStart + delta * src.speed;
+    if (sourceStart < 0 || sourceStart + clip.duration * src.speed > asset.duration + EPS) return null;
+    return withTrack(tl, track.id, () => withClip(track, clip.id, { ...src, sourceStart }));
+  }
+
   let sourceStart = src ? src.sourceStart : null;
   let start = clip.start;
   let duration = clip.duration;
 
-  if (drag.mode === "move") {
+  if (drag.mode === "move" || drag.mode === "slide") {
     start = Math.max(0, clip.start + delta);
     if (overlaps(track, start, start + duration, clip.id)) return null;
   } else if (drag.mode === "left") {
     start = clip.start + delta;
     duration = clipEnd(clip) - start;
-    if (src) sourceStart = src.sourceStart + delta;
+    if (src) sourceStart = src.sourceStart + delta * src.speed;
     if (overlaps(track, start, clipEnd(clip), clip.id)) return null;
   } else {
     duration = clip.duration + delta;
@@ -321,7 +459,10 @@ export function planClipDrag(tl: Timeline, drag: ClipDragState, time: Sec): Time
   if (src && sourceStart != null) {
     const asset = getAsset(tl, src.assetId);
     const outOfSource =
-      !asset || asset.kind !== src.kind || sourceStart < 0 || sourceStart + duration > asset.duration + EPS;
+      !asset ||
+      asset.kind !== src.kind ||
+      sourceStart < 0 ||
+      sourceStart + duration * src.speed > asset.duration + EPS;
     if (outOfSource) return null;
   }
 
@@ -362,6 +503,7 @@ export function bootstrapMainVideo(
     duration: asset.duration,
     assetId: asset.id,
     sourceStart: 0,
+    speed: 1,
   };
   const track: Track = { id: newTrackId(), kind: "video", name: KIND_LABEL.video + " 1", clips: [clip] };
   return {
