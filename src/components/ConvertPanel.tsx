@@ -274,7 +274,7 @@ export default function ConvertPanel() {
       </div>
 
       <div className="panel-foot">
-        <ShieldCheck /> 100% in-browser via mediabunny · assets: Mixkit, Google Fonts, Lucide
+        <ShieldCheck /> 100% in-browser via mediabunny · assets: Mixkit, Wikimedia Commons, Lucide · demo clip: Cristina E. Lozano (CC BY 3.0)
       </div>
     </aside>
   );

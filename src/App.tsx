@@ -13,9 +13,10 @@ import { FluxcutProvider, useFluxcutActions, useFluxcutBusy, useFluxcutSelector 
 // Hero video fetched from the internet (see README credits)
 const HERO_VIDEO = "https://assets.mixkit.co/videos/26789/26789-720.mp4"; // golden particle nebula
 
-// Default project media: the same clip vendored locally (same-origin, CORS-safe)
-// so a fresh session opens with the multi-track timeline already populated.
-const DEFAULT_SAMPLE = "samples/golden-particles.mp4";
+// Default project media: a sound-bearing coastal clip vendored locally
+// (same-origin, CORS-safe) so a fresh session opens with the multi-track
+// timeline already populated and a live mix to play with (see README credits).
+const DEFAULT_SAMPLE = "samples/coastal-swell.webm";
 
 export default function App() {
   return (
@@ -36,7 +37,7 @@ function Studio() {
     sampleTried.current = true;
     const file = fetch(DEFAULT_SAMPLE)
       .then((res) => res.ok ? res.blob() : Promise.reject(new Error("fetch " + res.status)))
-      .then((blob) => new File([blob], "golden-particles.mp4", { type: "video/mp4" }))
+      .then((blob) => new File([blob], "coastal-swell.webm", { type: "video/webm" }))
       .then((f) => actions.loadFile(f))
       .catch(() => {});
     void file;

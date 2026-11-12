@@ -43,7 +43,8 @@ The mediabunny engine chunk (~700 kB) is lazy-loaded on first conversion.
 
 | Asset | Source |
 | --- | --- |
-| Hero video + default timeline sample — "Golden particles with abstract nebula shapes" (720p stream + 360p copy vendored at `public/samples/`) | [Mixkit](https://mixkit.co/free-stock-video/gold-particles/) |
+| Hero video — "Golden particles with abstract nebula shapes" (720p stream, fetched remotely) | [Mixkit](https://mixkit.co/free-stock-video/gold-particles/) |
+| Default timeline sample — "Pequeño oleaje sobre Rivera Brava" by Cristina E. Lozano (CC BY 3.0, vendored at `public/samples/coastal-swell.webm`) | [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Peque%C3%B1o_oleaje_sobre_Rivera_Brava,_junto_a_Faja_dos_Padres_(Madeira,_Portugal).webm) |
 | Demo filmstrip stills (festival, smoke, glitter, fire…) | [Mixkit](https://mixkit.co) |
 | Inter + Space Grotesk typefaces | [Google Fonts](https://fonts.google.com) |
 | Icons | [Lucide](https://lucide.dev) (npm: lucide-react) |
