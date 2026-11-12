@@ -1,5 +1,7 @@
 # Fluxcut — Video Conversion Studio
 
+The app runs live at [jimlah.github.io/fluxcut](https://jimlah.github.io/fluxcut/) (deployed by the Pages workflow on every push to main).
+
 A single-page video conversion + editing studio styled after a dark, cinematic
 theme (frosted glass, warm gold/red accents, circular tool rail, multi-track
 timeline).
