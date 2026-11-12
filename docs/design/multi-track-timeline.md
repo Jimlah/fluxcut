@@ -3,6 +3,9 @@
 Feature. "Stack and arrange multiple layers of video, audio, images, and text independently."
 Base: arena candidate A (deepseek-v4.1-flash). Cross-judge: mistral-large-4, ranked it #1 on every rubric axis; the second seat (minimax-m3) is a noted dropout (empty body twice through the panel). Grafts below close the judge's gap list.
 
+> Standing rule: every user intent is one machine event; components hold no
+> domain state (refs and view-model subscriptions only). See AGENTS.md.
+
 ## Data shape (the organizing structure)
 
 Two planes: an asset registry + an ordered track list with kind-typed clip lists.

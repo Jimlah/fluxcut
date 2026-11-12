@@ -116,6 +116,8 @@ export type FluxcutEvent =
   | { type: "REQUEST_PICK_FILE" }
   | { type: "REQUEST_PICK_TRACK_MEDIA"; trackId: TrackId }
   | { type: "ADD_MEDIA_CLIP"; trackId: TrackId; file: File }
+  | { type: "SET_URL_DRAFT"; value: string }
+  | { type: "SUBMIT_URL" }
   | { type: "SET_PROJECT_NAME"; name: string }
   | { type: "SET_PANEL_OPEN"; open: boolean }
   | { type: "TOGGLE_PANEL" }
@@ -159,6 +161,8 @@ export interface FluxcutContext {
   pickAccept: string;
   /** Incremented per pick request; FilePicker clicks the input on change, after accept is rendered */
   pickNonce: number;
+  /** Convert panel URL field — machine-owned so the whole draft flow is in the statechart */
+  urlDraft: string;
   /** URL being fetched for a remote-video load */
   pendingUrl: string | null;
   projectName: string;
@@ -204,6 +208,7 @@ const defaultContext: FluxcutContext = {
   pickTarget: null,
   pickAccept: DEFAULT_VIDEO_ACCEPT,
   pickNonce: 0,
+  urlDraft: "",
   pendingUrl: null,
   projectName: "Untitled conversion",
   panelOpen: true,
@@ -609,6 +614,7 @@ export const fluxcutMachine = setup({
       pickTarget: null,
       pickAccept: DEFAULT_VIDEO_ACCEPT,
       pickNonce: 0,
+      urlDraft: "",
     }),
   },
 }).createMachine({
@@ -782,6 +788,18 @@ export const fluxcutMachine = setup({
         pickNonce: context.pickNonce + 1,
       })),
     },
+    // ---- convert panel URL draft (machine-owned form state) ----
+    SET_URL_DRAFT: {
+      guard: ({ context, event }) => context.urlDraft !== event.value,
+      actions: assign({ urlDraft: ({ event }) => event.value }),
+    },
+    SUBMIT_URL: {
+      guard: ({ context }) => !!(context.urlDraft.trim() && context.fileUrl == null),
+      actions: raise(({ context }) => ({
+        type: "LOAD_URL" as const,
+        url: context.urlDraft.trim(),
+      })),
+    },
     // ---- chrome ----
     SET_PROJECT_NAME: {
       actions: assign({ projectName: ({ event }) => event.name }),
@@ -829,7 +847,7 @@ export const fluxcutMachine = setup({
         },
         LOAD_URL: {
           target: "downloading",
-          actions: assign({ pendingUrl: ({ event }) => event.url, error: "" }),
+          actions: assign({ pendingUrl: ({ event }) => event.url, error: "", urlDraft: "" }),
         },
       },
     },
@@ -986,7 +1004,7 @@ export const fluxcutMachine = setup({
           actions: [
             "revokeFileUrl",
             "revokeResult",
-            assign({ pendingUrl: ({ event }) => event.url, error: "", progress: 0 }),
+            assign({ pendingUrl: ({ event }) => event.url, error: "", progress: 0, urlDraft: "" }),
           ],
         },
         CLEAR: { target: "empty", actions: ["revokeFileUrl", "resetFile", "stopClock"] },
@@ -1143,7 +1161,7 @@ export const fluxcutMachine = setup({
           actions: [
             "revokeFileUrl",
             "revokeResult",
-            assign({ pendingUrl: ({ event }) => event.url, error: "", progress: 0 }),
+            assign({ pendingUrl: ({ event }) => event.url, error: "", progress: 0, urlDraft: "" }),
           ],
         },
         CLEAR: {

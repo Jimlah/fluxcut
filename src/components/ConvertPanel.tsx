@@ -1,4 +1,3 @@
-import { useState } from "react";
 import {
   WandSparkles,
   X,
@@ -15,7 +14,6 @@ import { useFluxcutActions, useFluxcutBusy, useFluxcutFields, useFluxcutStatus, 
 
 export default function ConvertPanel() {
   const actions = useFluxcutActions();
-  const [urlDraft, setUrlDraft] = useState("");
 
   // One grouped subscription + destructure; re-renders only when one of these
   // fields actually changes (shallow compare), not on every context mutation.
@@ -32,6 +30,7 @@ export default function ConvertPanel() {
     result,
     supportedFormats,
     capsProbed,
+    urlDraft,
   } = useFluxcutFields([
     "panelOpen",
     "file",
@@ -46,6 +45,7 @@ export default function ConvertPanel() {
     "result",
     "supportedFormats",
     "capsProbed",
+    "urlDraft",
   ] as const);
 
   // Everything rendered as text comes pre-formatted from the machine layer
@@ -86,19 +86,17 @@ export default function ConvertPanel() {
               className="url-row"
               onSubmit={(e) => {
                 e.preventDefault();
-                if (!urlDraft || busy) return;
-                actions.loadUrl(urlDraft);
-                setUrlDraft("");
+                actions.submitUrl();
               }}
             >
               <input
                 value={urlDraft}
-                onChange={(e) => setUrlDraft(e.target.value)}
+                onChange={(e) => actions.setUrlDraft(e.target.value)}
                 placeholder="…or paste a video URL"
                 spellCheck={false}
                 inputMode="url"
               />
-              <button type="submit" disabled={!urlDraft || busy}>
+              <button type="submit" disabled={!urlDraft.trim() || busy}>
                 Fetch
               </button>
             </form>

@@ -63,6 +63,8 @@ export function useFluxcutActions() {
       // ---- file workflow ----
       loadFile: (file: File) => send({ type: "LOAD_FILE", file }),
       loadUrl: (url: string) => send({ type: "LOAD_URL", url }),
+      setUrlDraft: (value: string) => send({ type: "SET_URL_DRAFT", value }),
+      submitUrl: () => send({ type: "SUBMIT_URL" }),
       dropFile: (file: File) => send({ type: "DROP_FILE", file }),
       pickFile: () => send({ type: "REQUEST_PICK_FILE" }),
       clear: () => send({ type: "CLEAR" }),
