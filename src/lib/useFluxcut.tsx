@@ -96,6 +96,9 @@ export function useFluxcutActions() {
       setClipText: (clipId: ClipId, text: string) => send({ type: "SET_CLIP_TEXT", clipId, text }),
       selectClip: (clipId: ClipId | null) => send({ type: "SELECT_CLIP", clipId }),
       deleteClip: (clipId: ClipId) => send({ type: "CLIP_DELETE", clipId }),
+      rippleDeleteClip: (clipId: ClipId | null) => send({ type: "CLIP_DELETE_RIPPLE", clipId }),
+      cutClip: (clipId: ClipId | null, time: number | null) => send({ type: "CUT_CLIP", clipId, time }),
+      setClipSpeed: (clipId: ClipId, speed: number) => send({ type: "SET_CLIP_SPEED", clipId, speed }),
       clipDragStart: (p: {
         clipId: ClipId;
         mode: ClipDragMode;
@@ -272,6 +275,8 @@ export interface ClipView {
   /** Filmstrip tiles on the primary video clip only. */
   filmstrip: string[] | null;
   text: string | null;
+  /** Composition sec per source sec on video/audio; null otherwise. */
+  speed: number | null;
 }
 
 export interface LaneView {
@@ -347,6 +352,7 @@ export function selectTimelineView(s: FluxcutSnapshot): TimelineView {
                 ? c.frames
                 : null,
             text: clip.kind === "text" ? clip.text : null,
+            speed: clip.kind === "video" || clip.kind === "audio" ? clip.speed : null,
           };
         }),
       }))
@@ -397,6 +403,8 @@ export interface PreviewMedia {
   src: string;
   /** Source seconds the media element should sit at for this comp time. */
   sourceTime: number;
+  /** Composition sec per source sec — the compositor mirrors it on the element. */
+  speed: number;
   active: boolean;
   elKind: "video" | "audio" | "image";
 }
@@ -462,8 +470,9 @@ export function selectPreview(s: FluxcutSnapshot): PreviewVM {
           src: asset.url,
           sourceTime:
             clip.kind === "video" || clip.kind === "audio"
-              ? clip.sourceStart + Math.max(0, time - clip.start)
+              ? clip.sourceStart + Math.max(0, time - clip.start) * clip.speed
               : 0,
+          speed: clip.kind === "video" || clip.kind === "audio" ? clip.speed : 1,
           active,
           elKind: clip.kind,
         },

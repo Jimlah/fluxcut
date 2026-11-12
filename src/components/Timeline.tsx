@@ -10,8 +10,9 @@ import {
   AudioLines,
   type LucideIcon,
 } from "lucide-react";
-import { DEMO_THUMBS, useFluxcutActions, useFluxcutBusy, useTimelineView } from "../lib/useFluxcut";
+import { DEMO_THUMBS, useFluxcutActions, useFluxcutBusy, useFluxcutSelector, useTimelineView } from "../lib/useFluxcut";
 import type { ClipView, LaneView } from "../lib/useFluxcut";
+import { SPEED_PRESETS } from "../lib/timeline";
 import type { ClipDragMode, TrackKind } from "../lib/timeline";
 
 const KIND_ICON: Record<TrackKind, LucideIcon> = {
@@ -47,6 +48,8 @@ export default function Timeline() {
   const actions = useFluxcutActions();
   const busy = useFluxcutBusy();
   const view = useTimelineView();
+  const activeTool = useFluxcutSelector((s) => s.context.activeTool);
+  const razor = activeTool === "razor";
 
   // Hand the ruler to the machine for scrubbing (React 19 ref cleanup)
   const attachStrip = useCallback(
@@ -78,6 +81,17 @@ export default function Timeline() {
       element: row as HTMLDivElement,
       seconds: view.secondsVisible,
     });
+  };
+
+  // Razor: pointer-down on a clip body cuts at the landed time instead of dragging.
+  const beginClipCut = (e: React.PointerEvent, clipId: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const row = (e.currentTarget as HTMLElement).closest<HTMLElement>(".lane-track");
+    if (!row) return;
+    const rect = row.getBoundingClientRect();
+    const time = Math.max(0, ((e.clientX - rect.left) / rect.width) * view.secondsVisible);
+    actions.cutClip(clipId, time);
   };
 
   const emptyLaneClick = (lane: LaneView, e: React.PointerEvent) => {
@@ -116,7 +130,7 @@ export default function Timeline() {
   const laneRows = view.lanes.length + 2;
 
   return (
-    <div className="timeline-dock">
+    <div className={"timeline-dock" + (razor ? " razor-active" : "")}>
       <div className="lanes">
         <div className="lanes-inner">
           <div className="ruler" style={{ gridRow: 1 }} ref={attachStrip} onPointerDown={beginScrub}>
@@ -171,8 +185,12 @@ export default function Timeline() {
                   <ClipBody
                     key={clip.id}
                     clip={clip}
+                    razor={razor}
                     onDrag={beginClipDrag}
+                    onCut={beginClipCut}
                     onDelete={() => actions.deleteClip(clip.id)}
+                    onDeleteRipple={() => actions.rippleDeleteClip(clip.id)}
+                    onSpeed={(speed) => actions.setClipSpeed(clip.id, speed)}
                     onText={(text) => actions.setClipText(clip.id, text)}
                   />
                 ))}
@@ -208,14 +226,27 @@ function LaneIcon({ kind }: { kind: TrackKind }) {
   return <Icon />;
 }
 
+// Modifiers on the body: Alt slips the source window, Ctrl/Meta slides the run.
+function bodyMode(e: React.PointerEvent, kind: ClipView["kind"]): ClipDragMode {
+  if (kind !== "video" && kind !== "audio") return "move";
+  if (e.altKey) return "slip";
+  if (e.ctrlKey || e.metaKey) return "slide";
+  return "move";
+}
+
 function ClipBody(props: {
   clip: ClipView;
+  razor: boolean;
   onDrag: (e: React.PointerEvent, clipId: string, mode: ClipDragMode) => void;
+  onCut: (e: React.PointerEvent, clipId: string) => void;
   onDelete: () => void;
+  onDeleteRipple: () => void;
+  onSpeed: (speed: number) => void;
   onText: (text: string) => void;
 }) {
-  const { clip, onDrag, onDelete, onText } = props;
+  const { clip, razor, onDrag, onCut, onDelete, onDeleteRipple, onSpeed, onText } = props;
   const Icon = KIND_ICON[clip.kind];
+  const media = clip.kind === "video" || clip.kind === "audio";
   return (
     <div
       className={`clip-body kind-${clip.kind}${clip.selected ? " selected" : ""}`}
@@ -224,7 +255,12 @@ function ClipBody(props: {
         width: `${clip.widthPct}%`,
         backgroundImage: clip.tile ? `url(${clip.tile})` : undefined,
       }}
-      onPointerDown={(e) => onDrag(e, clip.id, "move")}
+      title={
+        media
+          ? "Drag to move; Alt-drag slips the content inside the frame; Ctrl/Cmd-drag slides the run."
+          : "Drag to move the clip along its lane."
+      }
+      onPointerDown={(e) => (razor ? onCut(e, clip.id) : onDrag(e, clip.id, bodyMode(e, clip.kind)))}
     >
       {clip.filmstrip && (
         <span
@@ -248,16 +284,38 @@ function ClipBody(props: {
           {clip.label}
         </span>
       )}
+      {clip.speed != null &&
+        (clip.selected ? (
+          <select
+            className="clip-speed"
+            value={String(clip.speed)}
+            title="Clip speed"
+            onPointerDown={(e) => e.stopPropagation()}
+            onChange={(e) => onSpeed(Number(e.target.value))}
+          >
+            {SPEED_PRESETS.map((s) => (
+              <option key={s} value={String(s)}>
+                {String(s)}x
+              </option>
+            ))}
+          </select>
+        ) : clip.speed !== 1 ? (
+          <span className="clip-speed">{String(clip.speed)}x</span>
+        ) : null)}
       <button
         className="clip-del"
-        title="Delete clip"
+        title="Delete clip (Shift: close the gap)"
         onPointerDown={(e) => e.stopPropagation()}
-        onClick={onDelete}
+        onClick={(e) => (e.shiftKey ? onDeleteRipple() : onDelete())}
       >
         <X />
       </button>
-      <span className="clip-edge left" onPointerDown={(e) => onDrag(e, clip.id, "left")} />
-      <span className="clip-edge right" onPointerDown={(e) => onDrag(e, clip.id, "right")} />
+      {!razor && (
+        <>
+          <span className="clip-edge left" onPointerDown={(e) => onDrag(e, clip.id, "left")} />
+          <span className="clip-edge right" onPointerDown={(e) => onDrag(e, clip.id, "right")} />
+        </>
+      )}
     </div>
   );
 }

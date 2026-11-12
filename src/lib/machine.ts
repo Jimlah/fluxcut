@@ -33,7 +33,10 @@ import {
   newAssetId,
   planClipDrag,
   removeTrack,
+  rippleDeleteClip,
+  setClipSpeed,
   setClipText,
+  splitClip,
   type Asset,
   type ClipDragMode,
   type ClipId,
@@ -102,7 +105,10 @@ export type FluxcutEvent =
   | { type: "ADD_TEXT_CLIP"; trackId: TrackId }
   | { type: "SET_CLIP_TEXT"; clipId: ClipId; text: string }
   | { type: "SELECT_CLIP"; clipId: ClipId | null }
-  | { type: "CLIP_DELETE"; clipId: ClipId }
+  | { type: "CLIP_DELETE"; clipId: ClipId | null }
+  | { type: "CLIP_DELETE_RIPPLE"; clipId: ClipId | null }
+  | { type: "CUT_CLIP"; clipId: ClipId | null; time: number | null }
+  | { type: "SET_CLIP_SPEED"; clipId: ClipId; speed: number }
   | {
       type: "CLIP_DRAG_START";
       clipId: ClipId;
@@ -218,6 +224,11 @@ const defaultContext: FluxcutContext = {
 };
 
 /* ---------- actions helpers ---------- */
+
+/** The event's clip id, or the current selection when the event passes null. */
+function clipTarget(context: FluxcutContext, clipId: ClipId | null): ClipId | null {
+  return clipId ?? context.selectedClipId;
+}
 
 /** Adopts a projected timeline (or keeps the old one) and drops dead selections. */
 function resolveTimeline(context: FluxcutContext, next: Timeline | null): Partial<FluxcutContext> {
@@ -434,6 +445,10 @@ const keyboardActor = fromCallback<FluxcutEvent>(({ sendBack }) => {
     }
     if (e.key === "ArrowRight") sendBack({ type: "SEEK_BY", delta: e.shiftKey ? 5 : 1 });
     if (e.key === "ArrowLeft") sendBack({ type: "SEEK_BY", delta: e.shiftKey ? -5 : -1 });
+    if (e.key === "Backspace" || e.key === "Delete") {
+      sendBack(e.shiftKey ? { type: "CLIP_DELETE_RIPPLE", clipId: null } : { type: "CLIP_DELETE", clipId: null });
+    }
+    if (e.key === "s" || e.key === "S") sendBack({ type: "CUT_CLIP", clipId: null, time: null });
   };
   window.addEventListener("keydown", onKey);
   return () => window.removeEventListener("keydown", onKey);
@@ -742,8 +757,34 @@ export const fluxcutMachine = setup({
       ),
     },
     CLIP_DELETE: {
+      guard: ({ context, event }) => !!clipTarget(context, event.clipId),
+      actions: assign(({ context, event }) => {
+        const id = clipTarget(context, event.clipId);
+        if (!id) return {};
+        return resolveTimeline(context, deleteClip(context.timeline, id));
+      }),
+    },
+    CLIP_DELETE_RIPPLE: {
+      guard: ({ context, event }) => !!clipTarget(context, event.clipId),
+      actions: assign(({ context, event }) => {
+        const id = clipTarget(context, event.clipId);
+        if (!id) return {};
+        return resolveTimeline(context, rippleDeleteClip(context.timeline, id));
+      }),
+    },
+    CUT_CLIP: {
+      guard: ({ context, event }) => !!clipTarget(context, event.clipId),
+      actions: assign(({ context, event }) => {
+        const id = clipTarget(context, event.clipId);
+        const time = event.time ?? context.time;
+        const split = id ? splitClip(context.timeline, id, time) : null;
+        if (!split) return {};
+        return { timeline: split.timeline, selectedClipId: split.rightClipId };
+      }),
+    },
+    SET_CLIP_SPEED: {
       actions: assign(({ context, event }) =>
-        resolveTimeline(context, deleteClip(context.timeline, event.clipId))
+        resolveTimeline(context, setClipSpeed(context.timeline, event.clipId, event.speed))
       ),
     },
     SELECT_CLIP: {

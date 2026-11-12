@@ -29,6 +29,10 @@ export default function Compositor() {
         media.pause();
         continue;
       }
+      // Retime on speed changes so 0.25x / 8x playback stays smooth between nudges.
+      if (media.playbackRate !== layer.media.speed) {
+        media.playbackRate = layer.media.speed;
+      }
       if (media.readyState >= 1 && Math.abs(media.currentTime - layer.media.sourceTime) > 0.05) {
         const d = isFinite(media.duration) ? media.duration : Infinity;
         media.currentTime = Math.max(0, Math.min(layer.media.sourceTime, d - 0.05));

@@ -381,6 +381,24 @@ body {
 .clip-body .clip-edge.right { right: 0; }
 .clip-body .clip-edge:hover { background: rgba(245, 181, 68, 0.55); }
 
+/* speed chip: read-only badge on media bodies, native select while selected */
+.clip-body .clip-speed {
+  all: unset; cursor: pointer;
+  position: relative; flex: none;
+  margin-left: auto;
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: rgba(20, 16, 13, 0.72);
+  border: 1px solid var(--stroke-soft);
+  color: var(--ink);
+  font-size: 9px; font-weight: 600;
+  text-shadow: none;
+}
+
+/* razor tool: cutting replaces dragging while active */
+.razor-active .lanes, .razor-active .clip-body { cursor: crosshair; }
+.razor-active .clip-body .clip-edge { cursor: inherit; }
+
 .lane-add {
   grid-column: 1 / -1;
   flex: none;
