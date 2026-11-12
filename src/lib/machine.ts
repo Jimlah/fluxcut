@@ -44,6 +44,15 @@ import {
   type TrackId,
   type TrackKind,
 } from "./timeline";
+import {
+  emptyJournal,
+  openTransaction,
+  redoStep,
+  registerEdit,
+  settleTransaction,
+  undoStep,
+  type SnapshotJournal,
+} from "./history";
 
 /* ---------- actor payloads ---------- */
 
@@ -109,6 +118,8 @@ export type FluxcutEvent =
   | { type: "CLIP_DELETE_RIPPLE"; clipId: ClipId | null }
   | { type: "CUT_CLIP"; clipId: ClipId | null; time: number | null }
   | { type: "SET_CLIP_SPEED"; clipId: ClipId; speed: number }
+  | { type: "UNDO" }
+  | { type: "REDO" }
   | {
       type: "CLIP_DRAG_START";
       clipId: ClipId;
@@ -157,6 +168,8 @@ export interface FluxcutContext {
   selectedClipId: ClipId | null;
   /** Live clip drag; anchorTime is the last accepted pointer time. */
   drag: { clipId: ClipId; mode: ClipDragMode; anchorTime: number } | null;
+  /** Snapshot journal driving undo/redo — see lib/history.ts. */
+  history: SnapshotJournal;
   /** Timeline ruler element — attached from the Timeline component */
   stripEl: HTMLDivElement | null;
   /** Hidden file input element — attached from the FilePicker component */
@@ -209,6 +222,7 @@ const defaultContext: FluxcutContext = {
   timeline: EMPTY_TIMELINE,
   selectedClipId: null,
   drag: null,
+  history: emptyJournal(),
   stripEl: null,
   fileInput: null,
   pickTarget: null,
@@ -239,6 +253,41 @@ function resolveTimeline(context: FluxcutContext, next: Timeline | null): Partia
       context.selectedClipId && findClip(next, context.selectedClipId)
         ? context.selectedClipId
         : null,
+  };
+}
+
+// The one commit definition. A null (illegal) or same-reference (no-op)
+// helper result records nothing; SET_CLIP_TEXT's coalesceKey brackets its
+// burst to the next boundary.
+function applyTimelineEdit(
+  context: FluxcutContext,
+  next: Timeline | null,
+  opts?: { coalesceKey?: string; select?: ClipId }
+): Partial<FluxcutContext> {
+  if (next == null || next === context.timeline) return {};
+  const open = context.history.open;
+  const coalesceKey = opts?.coalesceKey;
+  if (coalesceKey != null) {
+    if (open?.kind === "text" && open.key === coalesceKey) {
+      return resolveTimeline(context, next);
+    }
+    return {
+      ...resolveTimeline(context, next),
+      history: openTransaction(settleTransaction(context.history, context.timeline), {
+        kind: "text",
+        key: coalesceKey,
+        before: context.timeline,
+      }),
+    };
+  }
+  return {
+    ...resolveTimeline(context, next),
+    history: registerEdit(
+      settleTransaction(context.history, context.timeline),
+      context.timeline,
+      next
+    ),
+    ...(opts?.select != null ? { selectedClipId: opts.select } : {}),
   };
 }
 
@@ -449,6 +498,14 @@ const keyboardActor = fromCallback<FluxcutEvent>(({ sendBack }) => {
       sendBack(e.shiftKey ? { type: "CLIP_DELETE_RIPPLE", clipId: null } : { type: "CLIP_DELETE", clipId: null });
     }
     if (e.key === "s" || e.key === "S") sendBack({ type: "CUT_CLIP", clipId: null, time: null });
+    const mod = e.metaKey || e.ctrlKey;
+    if (mod && (e.key === "z" || e.key === "Z")) {
+      e.preventDefault();
+      sendBack(e.shiftKey ? { type: "REDO" } : { type: "UNDO" });
+    } else if ((e.key === "y" || e.key === "Y") && (e.ctrlKey || (e.metaKey && e.shiftKey))) {
+      e.preventDefault();
+      sendBack({ type: "REDO" });
+    }
   };
   window.addEventListener("keydown", onKey);
   return () => window.removeEventListener("keydown", onKey);
@@ -626,6 +683,7 @@ export const fluxcutMachine = setup({
       timeline: EMPTY_TIMELINE,
       selectedClipId: null,
       drag: null,
+      history: emptyJournal(),
       pickTarget: null,
       pickAccept: DEFAULT_VIDEO_ACCEPT,
       pickNonce: 0,
@@ -733,27 +791,32 @@ export const fluxcutMachine = setup({
     },
     // ---- track + clip edits: helpers return null → keep previous state ----
     ADD_TRACK: {
-      actions: assign({ timeline: ({ context, event }) => addTrack(context.timeline, event.kind) }),
+      actions: assign(({ context, event }) =>
+        applyTimelineEdit(context, addTrack(context.timeline, event.kind))
+      ),
     },
     REMOVE_TRACK: {
       actions: assign(({ context, event }) =>
-        resolveTimeline(context, removeTrack(context.timeline, event.trackId))
+        applyTimelineEdit(context, removeTrack(context.timeline, event.trackId))
       ),
     },
     MOVE_TRACK: {
       actions: assign(({ context, event }) =>
-        resolveTimeline(context, moveTrack(context.timeline, event.trackId, event.dir))
+        applyTimelineEdit(context, moveTrack(context.timeline, event.trackId, event.dir))
       ),
     },
     ADD_TEXT_CLIP: {
       actions: assign(({ context, event }) => {
         const placed = addTextClip(context.timeline, event.trackId, context.time);
-        return placed ? { timeline: placed.timeline, selectedClipId: placed.clipId } : {};
+        if (!placed) return {};
+        return applyTimelineEdit(context, placed.timeline, { select: placed.clipId });
       }),
     },
     SET_CLIP_TEXT: {
       actions: assign(({ context, event }) =>
-        resolveTimeline(context, setClipText(context.timeline, event.clipId, event.text))
+        applyTimelineEdit(context, setClipText(context.timeline, event.clipId, event.text), {
+          coalesceKey: "text:" + event.clipId,
+        })
       ),
     },
     CLIP_DELETE: {
@@ -761,7 +824,7 @@ export const fluxcutMachine = setup({
       actions: assign(({ context, event }) => {
         const id = clipTarget(context, event.clipId);
         if (!id) return {};
-        return resolveTimeline(context, deleteClip(context.timeline, id));
+        return applyTimelineEdit(context, deleteClip(context.timeline, id));
       }),
     },
     CLIP_DELETE_RIPPLE: {
@@ -769,7 +832,7 @@ export const fluxcutMachine = setup({
       actions: assign(({ context, event }) => {
         const id = clipTarget(context, event.clipId);
         if (!id) return {};
-        return resolveTimeline(context, rippleDeleteClip(context.timeline, id));
+        return applyTimelineEdit(context, rippleDeleteClip(context.timeline, id));
       }),
     },
     CUT_CLIP: {
@@ -779,28 +842,67 @@ export const fluxcutMachine = setup({
         const time = event.time ?? context.time;
         const split = id ? splitClip(context.timeline, id, time) : null;
         if (!split) return {};
-        return { timeline: split.timeline, selectedClipId: split.rightClipId };
+        return applyTimelineEdit(context, split.timeline, { select: split.rightClipId });
       }),
     },
     SET_CLIP_SPEED: {
       actions: assign(({ context, event }) =>
-        resolveTimeline(context, setClipSpeed(context.timeline, event.clipId, event.speed))
+        applyTimelineEdit(context, setClipSpeed(context.timeline, event.clipId, event.speed))
       ),
+    },
+    UNDO: {
+      actions: assign(({ context }) => {
+        if (context.history.open?.kind === "drag") return {};
+        const settled = context.history.open
+          ? settleTransaction(context.history, context.timeline)
+          : context.history;
+        const step = undoStep(settled);
+        if (!step) return {};
+        return {
+          ...resolveTimeline(context, step.timeline),
+          history: step.journal,
+          time: Math.max(0, Math.min(context.time, Math.max(0, compositionEnd(step.timeline) - 0.05))),
+        };
+      }),
+    },
+    REDO: {
+      actions: assign(({ context }) => {
+        if (context.history.open?.kind === "drag") return {};
+        const settled = context.history.open
+          ? settleTransaction(context.history, context.timeline)
+          : context.history;
+        const step = redoStep(settled);
+        if (!step) return {};
+        return {
+          ...resolveTimeline(context, step.timeline),
+          history: step.journal,
+          time: Math.max(0, Math.min(context.time, Math.max(0, compositionEnd(step.timeline) - 0.05))),
+        };
+      }),
     },
     SELECT_CLIP: {
       guard: ({ context, event }) => event.clipId == null || !!findClip(context.timeline, event.clipId),
-      actions: assign({ selectedClipId: ({ event }) => event.clipId }),
+      // Selecting also settles an open text burst.
+      actions: assign(({ context, event }) => ({
+        selectedClipId: event.clipId,
+        history: settleTransaction(context.history, context.timeline),
+      })),
     },
     CLIP_DRAG_START: {
       actions: [
-        assign({
-          drag: ({ event }) => ({
+        assign(({ context, event }) => ({
+          drag: {
             clipId: event.clipId,
             mode: event.mode,
             anchorTime: event.time,
+          },
+          selectedClipId: event.clipId,
+          history: openTransaction(settleTransaction(context.history, context.timeline), {
+            kind: "drag",
+            key: "drag:" + event.clipId,
+            before: context.timeline,
           }),
-          selectedClipId: ({ event }) => event.clipId,
-        }),
+        })),
         sendTo("clipDrag", ({ event }) => ({
           type: "START",
           element: event.element,
@@ -817,7 +919,10 @@ export const fluxcutMachine = setup({
       }),
     },
     CLIP_DRAG_END: {
-      actions: assign({ drag: null }),
+      actions: assign(({ context }) => ({
+        drag: null,
+        history: settleTransaction(context.history, context.timeline),
+      })),
     },
     // ---- media ingest for tracks ----
     REQUEST_PICK_TRACK_MEDIA: {
@@ -919,6 +1024,7 @@ export const fluxcutMachine = setup({
               }),
             selectedClipId: null,
             drag: null,
+            history: emptyJournal(),
           }),
         },
         onError: {
@@ -1037,6 +1143,7 @@ export const fluxcutMachine = setup({
               timeline: EMPTY_TIMELINE,
               selectedClipId: null,
               drag: null,
+              history: emptyJournal(),
             }),
           ],
         },
@@ -1194,6 +1301,7 @@ export const fluxcutMachine = setup({
               timeline: EMPTY_TIMELINE,
               selectedClipId: null,
               drag: null,
+              history: emptyJournal(),
             }),
           ],
         },
@@ -1231,10 +1339,7 @@ export const fluxcutMachine = setup({
               context.time
             );
             if (!next) return { error: "That file doesn't fit this track." };
-            return {
-              ...resolveTimeline(context, next.timeline),
-              selectedClipId: next.clipId,
-            };
+            return applyTimelineEdit(context, next.timeline, { select: next.clipId });
           }),
         },
         onError: {

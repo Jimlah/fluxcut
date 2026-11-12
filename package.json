@@ -8,6 +8,8 @@
     "build": "tsc --noEmit && vite build",
     "lint": "oxlint",
     "check:timeline": "node scripts/check-timeline.mjs",
+    "check:history": "node scripts/check-history.mjs",
+    "check:machine": "node scripts/check-machine.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
