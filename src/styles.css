@@ -243,6 +243,12 @@ body {
 .strip .frame .add-slot svg { width: 18px; height: 18px; }
 
 /* ---------- multi-track lanes + ruler scrub ---------- */
+.lanes-inner .ruler {
+  grid-column: 2;
+  position: sticky; top: 0; z-index: 7;
+  border-radius: 6px;
+  background: rgba(26, 23, 21, 0.88);
+}
 .ruler .knob {
   position: absolute; top: 3px; left: 0;
   transform: translateX(-50%);
@@ -265,26 +271,33 @@ body {
 .lanes-inner {
   position: relative;
   min-height: 100%;
-  display: flex; flex-direction: column; gap: 4px;
+  display: grid;
+  grid-template-columns: 124px minmax(0, 1fr);
+  grid-auto-rows: min-content;
+  column-gap: 8px;
+  row-gap: 4px;
+  align-items: stretch;
 }
-.lanes-inner .lane-trim {
-  position: absolute; top: 0; bottom: 0;
+.tl-overlay {
+  position: relative;
+  grid-column: 2;
+  pointer-events: none;
+  z-index: 6;
+}
+.tl-overlay .lane-trim {
+  position: absolute; top: 2px; bottom: 2px;
   border-left: 2px solid var(--accent);
   border-right: 2px solid var(--accent);
   background: rgba(245, 181, 68, 0.08);
-  pointer-events: none;
-  z-index: 4;
 }
-.lanes-inner .playhead {
+.tl-overlay .playhead {
   position: absolute; top: 0; bottom: 0; width: 2px;
   background: #fff;
   box-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
-  pointer-events: none;
-  z-index: 5;
 }
 
-.lane-row { flex: none; display: flex; gap: 8px; height: 30px; }
 .lane-head {
+  grid-column: 1;
   width: 124px; flex: none; min-width: 0;
   display: flex; align-items: center; gap: 3px;
   color: var(--ink-2); font-size: 11.5px; font-weight: 600;
@@ -303,7 +316,9 @@ body {
 .lane-head .lane-btn svg { width: 11px; height: 11px; }
 
 .lane-track {
-  position: relative; flex: 1; min-width: 0;
+  grid-column: 2;
+  height: 30px;
+  position: relative; min-width: 0;
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.045);
   border: 1px solid var(--stroke-soft);
@@ -367,6 +382,7 @@ body {
 .clip-body .clip-edge:hover { background: rgba(245, 181, 68, 0.55); }
 
 .lane-add {
+  grid-column: 1 / -1;
   flex: none;
   display: flex; align-items: center; gap: 6px;
   padding: 3px 0;

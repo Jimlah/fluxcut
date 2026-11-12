@@ -1,13 +1,13 @@
-import { useCallback } from "react";
+import { Fragment, useCallback } from "react";
 import {
   ArrowDown,
   ArrowUp,
-  AudioLines,
   Clapperboard,
   Image as ImageIcon,
   Plus,
   Type,
   X,
+  AudioLines,
   type LucideIcon,
 } from "lucide-react";
 import { DEMO_THUMBS, useFluxcutActions, useTimelineView } from "../lib/useFluxcut";
@@ -21,6 +21,13 @@ const KIND_ICON: Record<TrackKind, LucideIcon> = {
   audio: AudioLines,
 };
 
+const KIND_LABEL: Record<TrackKind, string> = {
+  video: "Video",
+  image: "Image",
+  text: "Text",
+  audio: "Audio",
+};
+
 const KIND_ADD_TITLE: Record<TrackKind, string> = {
   video: "Pick a video for this track",
   image: "Pick an image for this track",
@@ -32,6 +39,9 @@ const KIND_ADD_TITLE: Record<TrackKind, string> = {
  * Pure presentation: lanes, ticks and the drag geometry come from the machine
  * layer (selectTimelineView + drag actors). The component only reports pointer
  * positions and intent — every placement decision happens in lib/timeline.ts.
+ * The live view is a two-column grid: headers in column 1, and ruler, tracks,
+ * the add footer, and the trim/playhead overlay in column 2 — so every time
+ * percentage shares the track column's x-origin.
  */
 export default function Timeline() {
   const actions = useFluxcutActions();
@@ -69,7 +79,9 @@ export default function Timeline() {
     });
   };
 
-  const emptyLaneClick = (lane: LaneView) => {
+  const emptyLaneClick = (lane: LaneView, e: React.PointerEvent) => {
+    // A clip drag stops propagation, so a live pointerdown here means empty track.
+    if (e.defaultPrevented) return;
     if (lane.kind === "text") actions.addTextClip(lane.id);
     else if (lane.kind === "image") actions.pickTrackMedia(lane.id);
     else actions.selectClip(null);
@@ -100,31 +112,27 @@ export default function Timeline() {
     );
   }
 
+  const laneRows = view.lanes.length + 2;
+
   return (
     <div className="timeline-dock">
-      <div className="ruler" ref={attachStrip} onPointerDown={beginScrub}>
-        {view.ticks.map((label, i) => (
-          <span key={i} style={{ display: "contents" }}>
-            <span className="tick-label">{label}</span>
-            {i < view.ticks.length - 1 && <span className="dots" />}
-          </span>
-        ))}
-        <span className="knob" style={{ left: `${view.playheadPct}%` }}>
-          {view.timeText}
-        </span>
-      </div>
-
       <div className="lanes">
         <div className="lanes-inner">
-          {view.trimActive && (
-            <div
-              className="lane-trim"
-              style={{ left: `${view.trimLeftPct}%`, width: `${view.trimWidthPct}%` }}
-            />
-          )}
-          {view.lanes.map((lane) => (
-            <div className="lane-row" key={lane.id}>
-              <div className="lane-head">
+          <div className="ruler" style={{ gridRow: 1 }} ref={attachStrip} onPointerDown={beginScrub}>
+            {view.ticks.map((label, i) => (
+              <span key={i} style={{ display: "contents" }}>
+                <span className="tick-label">{label}</span>
+                {i < view.ticks.length - 1 && <span className="dots" />}
+              </span>
+            ))}
+            <span className="knob" style={{ left: `${view.playheadPct}%` }}>
+              {view.timeText}
+            </span>
+          </div>
+
+          {view.lanes.map((lane, i) => (
+            <Fragment key={lane.id}>
+              <div className="lane-head" style={{ gridRow: i + 2 }}>
                 <LaneIcon kind={lane.kind} />
                 <span className="lane-name">{lane.name}</span>
                 <button
@@ -156,7 +164,7 @@ export default function Timeline() {
                   <X />
                 </button>
               </div>
-              <div className="lane-track" onPointerDown={() => emptyLaneClick(lane)}>
+              <div className="lane-track" style={{ gridRow: i + 2 }} onPointerDown={(e) => emptyLaneClick(lane, e)}>
                 {lane.clips.map((clip) => (
                   <ClipBody
                     key={clip.id}
@@ -167,9 +175,9 @@ export default function Timeline() {
                   />
                 ))}
               </div>
-            </div>
+            </Fragment>
           ))}
-          <div className="lane-add">
+          <div className="lane-add" style={{ gridRow: laneRows }}>
             <span>Add track</span>
             {(["video", "image", "text", "audio"] as const).map((kind) => (
               <button key={kind} className="lane-add-btn" onClick={() => actions.addTrack(kind)}>
@@ -178,19 +186,20 @@ export default function Timeline() {
               </button>
             ))}
           </div>
-          <div className="playhead" style={{ left: `${view.playheadPct}%` }} />
+          <div className="tl-overlay" style={{ gridRow: `2 / ${laneRows}` }}>
+            {view.trimActive && (
+              <div
+                className="lane-trim"
+                style={{ left: `${view.trimLeftPct}%`, width: `${view.trimWidthPct}%` }}
+              />
+            )}
+            <div className="playhead" style={{ left: `${view.playheadPct}%` }} />
+          </div>
         </div>
       </div>
     </div>
   );
 }
-
-const KIND_LABEL: Record<TrackKind, string> = {
-  video: "Video",
-  image: "Image",
-  text: "Text",
-  audio: "Audio",
-};
 
 function LaneIcon({ kind }: { kind: TrackKind }) {
   const Icon = KIND_ICON[kind];

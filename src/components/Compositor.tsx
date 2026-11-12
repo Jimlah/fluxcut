@@ -23,7 +23,9 @@ export default function Compositor() {
       const el = els.current.get(layer.clipId);
       if (!el) continue;
       const media = el as HTMLVideoElement | HTMLAudioElement;
-      if (!layer.media.active) {
+      // An active clip whose video keeps running while the composition is
+      // paused is wrong: media follows the clock, so pause covers both cases.
+      if (!layer.media.active || !vm.playing) {
         media.pause();
         continue;
       }

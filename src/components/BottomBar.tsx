@@ -1,4 +1,6 @@
 import {
+  Pause,
+  Play,
   SkipBack,
   SkipForward,
   Flag,
@@ -21,6 +23,7 @@ export default function BottomBar() {
   const hasFile = useFluxcutSelector((s) => !!s.context.fileUrl);
   const panelOpen = useFluxcutSelector((s) => s.context.panelOpen);
   const gridOn = useFluxcutSelector((s) => s.context.gridOn);
+  const playing = useFluxcutSelector((s) => s.context.playing);
 
   // State pills — pre-formatted by the machine layer's view model
   const { aspect, resLabel, durationText, qualityTag, sizeHint, trimInComp, trimOutComp, trimSettable, trimHint } =
@@ -29,6 +32,14 @@ export default function BottomBar() {
   return (
     <div className="bottombar">
       <div className="transport">
+        <button
+          className="circle-btn"
+          title={playing ? "Pause (space)" : "Play (space)"}
+          onClick={() => actions.togglePlay()}
+          disabled={!hasFile}
+        >
+          {playing ? <Pause /> : <Play />}
+        </button>
         <button
           className="circle-btn"
           title="To In point"
